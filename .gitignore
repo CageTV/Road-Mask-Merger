@@ -1,0 +1,21 @@
+bin/
+obj/
+publish/
+publish_multifile/
+*.esp
+*.csv
+smoke_out/
+*.log
+log.txt
+settings-used.json
+For Distribution/
+*.zip
+*.7z
+*.jpg
+*.jpeg
+Thumbs.db
+
+# The bundled ACMOS road-mask PNGs are shipped assets, not throwaway
+# screenshots - the generic *.png rule below would otherwise exclude them.
+*.png
+!RoadMaskMerger/Assets/**
