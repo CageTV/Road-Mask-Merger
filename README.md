@@ -110,8 +110,9 @@ RoadMaskMerger.exe --mo2 <instancePath> <profileName> [gameDataPath]
 live in their own separate repos.
 
 **Third-party assets:** the bundled ACMOS road-mask images are licensed
-CC BY-NC-SA by their author — see `RoadMaskMerger/Assets/NOTICE.md` for
-attribution and the ShareAlike condition. This project's own code is MIT.
+CC BY-NC-SA by their own author — see `RoadMaskMerger/Assets/NOTICE.md`
+for attribution. This project's own code is licensed CC BY-NC-SA too (see
+below) — free to use and share, not for commercial resale.
 
 ## Contributing
 
@@ -121,6 +122,8 @@ from the console is the most useful bug report).
 
 ## License
 
-MIT (this project's own code) — see [LICENSE](LICENSE). The bundled ACMOS
-assets carry their own, separate CC BY-NC-SA license — see
-`RoadMaskMerger/Assets/NOTICE.md`.
+CC BY-NC-SA 4.0 — see [LICENSE](LICENSE). Free to use, modify, and share
+(with attribution and under the same license), but not for commercial
+purposes — no selling this tool or a modified version of it. The bundled
+ACMOS assets carry their own attribution notice under the same license
+family — see `RoadMaskMerger/Assets/NOTICE.md`.

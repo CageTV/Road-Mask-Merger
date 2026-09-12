@@ -22,13 +22,12 @@ Attribution-NonCommercial-ShareAlike). This means:
   alongside the assets; don't strip it out in a refactor.
 - **NonCommercial only** - fine here; this whole toolkit is a personal,
   non-commercial project, never sold or monetized.
-- **ShareAlike** - any redistribution of THESE SPECIFIC FILES (not
-  necessarily this project's own C# code, which is separately MIT-licensed)
-  must carry the same CC BY-NC-SA terms. If RoadMaskMerger is ever packaged
-  for wider distribution (matching how Landscape Seam Fixer / Landscape
-  Texture Fixer / Floating Object Fixer were packaged for GitHub on
-  2026-09-10), this NOTICE.md and the CC BY-NC-SA terms must ship alongside
-  `ACMOS-roads/` - do not fold these assets into the MIT-licensed code
-  without carrying this notice forward.
+- **ShareAlike** - any redistribution of these files must carry the same
+  CC BY-NC-SA terms. As of the 2026-09-12 GitHub release, this project's
+  own C# code is licensed CC BY-NC-SA too (see the repo's own `LICENSE`),
+  so the whole download - code and bundled assets alike - now shares one
+  consistent license. This NOTICE.md still travels alongside
+  `ACMOS-roads/` regardless, since it's the specific attribution ACMOS's
+  own author is owed, distinct from this project's own copyright notice.
 
 Full license text: https://creativecommons.org/licenses/by-nc-sa/4.0/
