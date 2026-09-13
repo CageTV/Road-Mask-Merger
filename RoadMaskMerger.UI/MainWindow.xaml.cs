@@ -420,8 +420,23 @@ public partial class MainWindow : Window
         }
         else
         {
-            ShowValidation("Road Mask Merger currently only supports MO2 mode (Vortex/Direct aren't wired up yet).");
-            return null;
+            var dataFolder = s.IsVortexMode ? s.VortexGameDataPath : s.DirectGameDataPath;
+
+            if (string.IsNullOrEmpty(dataFolder))
+            {
+                ShowValidation("Please fill in the game Data folder.");
+                return null;
+            }
+
+            Log($"Game Data path: {dataFolder}");
+            Log($"Road-source plugin: {s.RoadSourcePlugin}");
+            Log($"Worldspace: {s.Worldspace}");
+            Log($"ACMOS roads folder: {s.AcmosRoadsFolder} ({(s.PathsOnly ? "Paths Only" : "Roads")} variant)");
+            Log("");
+
+            return RoadTerrainMerger.RunForDirectDataFolder(
+                dataFolder, pluginName, outputFolder, Log,
+                s.RoadSourcePlugin, s.AcmosRoadsFolder, s.Worldspace, s.PathsOnly);
         }
     }
 

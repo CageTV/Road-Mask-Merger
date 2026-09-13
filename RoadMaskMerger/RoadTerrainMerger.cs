@@ -89,6 +89,35 @@ public static class RoadTerrainMerger
         }
     }
 
+    // Vortex (default hardlink-deployment layout - the Data folder itself
+    // already reflects the merged load order, no separate resolution step
+    // needed) and Direct-game-path both land here: no MO2 profile to parse,
+    // just point Mutagen straight at whatever Data folder is already there
+    // and let it resolve plugins.txt itself. Mirrors
+    // SeamFixer.GenerateFixPluginForDirectDataFolder in the sibling
+    // Landscape Seam Fixer tool - same reasoning, same shape.
+    public static RoadMergeResult RunForDirectDataFolder(
+        string dataFolderPath,
+        string outputPluginName, string outputDirectory,
+        Action<string> log,
+        string roadSourcePlugin,
+        string acmosRoadsFolder,
+        string worldspaceFilter,
+        bool pathsOnly = false)
+    {
+        using var env = GameEnvironmentBuilder<ISkyrimMod, ISkyrimModGetter>
+            .Create(GameRelease.SkyrimSE)
+            .WithTargetDataFolder(dataFolderPath)
+            .Build();
+
+        var priorityIndex = env.LoadOrder.ListedOrder
+            .Select((listing, idx) => (listing.ModKey, idx))
+            .ToDictionary(x => x.ModKey, x => x.idx);
+
+        return GenerateCore(env.LinkCache, priorityIndex, dataFolderPath, outputPluginName, outputDirectory,
+            log, roadSourcePlugin, acmosRoadsFolder, worldspaceFilter, pathsOnly);
+    }
+
     // Working state for one cell that Northern Roads genuinely edited
     // SOMEWHERE (the necessary condition for it to ever become road-
     // sourced - see Pass A below). Kept as a mutable class, not a record:

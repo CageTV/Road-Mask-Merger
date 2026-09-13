@@ -1,5 +1,14 @@
 # Road Mask Merger — Changelog
 
+## v1.1.0 — 2026-09-12
+
+- Vortex and Direct-game-path modes are now actually wired up — the UI
+  panels existed and could auto-detect/fill in a path, but "Generate Merge
+  Plugin" hard-blocked both with a validation error regardless. Mirrors the
+  sibling Landscape Seam Fixer tool: both point Mutagen straight at the
+  Data folder, no MO2 profile parsing needed.
+  (The console CLI is still MO2-only for now.)
+
 ## v1.0.0 — 2026-09-11
 
 First public release.

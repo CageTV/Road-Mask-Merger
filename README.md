@@ -1,6 +1,6 @@
 # Road Mask Merger
 
-**Current version: 1.0.0** — see [CHANGELOG.md](CHANGELOG.md) for what's new.
+**Current version: 1.1.0** — see [CHANGELOG.md](CHANGELOG.md) for what's new.
 
 A standalone tool for Skyrim Special Edition / Anniversary Edition that
 auto-generates a compatibility patch between a road-shaping mod (Northern
@@ -77,8 +77,12 @@ dotnet publish RoadMaskMerger.UI -c Release -r win-x64 --self-contained true -o 
 ## Usage — desktop app (recommended)
 
 1. Launch `RoadMaskMerger.UI.exe`.
-2. Point it at your MO2 instance folder (Vortex/Direct aren't wired up yet
-   — MO2 only for now).
+2. Pick how your mods are managed:
+   - **Mod Organizer 2** — point it at your MO2 instance folder and game
+     Data folder.
+   - **Vortex** — point it at your game's Data folder (this is where Vortex
+     deploys mods by default), or click "Auto-detect from Vortex."
+   - **Direct game path** — no mod manager; just your game's Data folder.
 3. Fill in the **road-source plugin** (defaults to "Northern Roads.esp") and
    the **worldspace** (defaults to "Tamriel").
 4. The bundled ACMOS road-mask folder is used by default — only change it if
