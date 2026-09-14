@@ -1,5 +1,22 @@
 # Road Mask Merger — Changelog
 
+## v1.2.0 — 2026-09-14
+
+**Fixed a real gap found via a user's own xEdit screenshot**: this tool's road-height merge correctly
+excludes the road-source plugin's own patch family from "the other mod's" landscape data (needed so
+height merging doesn't double-count the road mod's own edits) — but that same exclusion silently
+dropped that patch's TEXTURE work too, even when it had nothing to do with roads. A real case: a
+"Landscape Fixes for Grass Mods" patch for Northern Roads painted a grass-blend texture layer that
+this tool's output plugin then completely lost, because texture data only ever came from "the other
+mod," never from the road-source side. Fixed by additionally carrying forward the road-source
+plugin's own texture layers into the merged output wherever the road-source plugin (or a genuine
+patch of it) actually authored that specific texture — verified this is the road-source's own
+texture by checking who originally DEFINED the texture record, not by any naming convention, so it
+works correctly for whatever `--road-source=` plugin is configured, not just Northern Roads
+specifically. Additive only: never overwrites or removes anything from the other mod's own texture
+set. Verified against a real 1282-plugin profile: 833 cells merged, 1409 texture layers preserved
+that would otherwise have been silently dropped.
+
 ## v1.1.0 — 2026-09-12
 
 - Vortex and Direct-game-path modes are now actually wired up — the UI

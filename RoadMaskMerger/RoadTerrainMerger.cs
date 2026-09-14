@@ -28,6 +28,13 @@ public static class RoadTerrainMerger
     // headroom for VhgtEncoder's /8-then-round step (see its own comments).
     const float MaxEncodableStep = 1000f;
 
+    // Same verified-against-real-game-data value TextureLayerFixer.cs uses
+    // (7 = 1 mandatory base layer + up to 6 alpha layers, the true observed
+    // per-quadrant maximum) - reused here for the road-texture preservation block
+    // below so this tool never tries to write more layers than the engine
+    // actually supports.
+    const int MaxLayersPerQuadrant = 7;
+
     // Originally set to 40 on the (wrong) assumption that a single-vertex-
     // wide repair front only needs ~33 iterations to cross a 33-wide grid.
     // Confirmed wrong on the very first live test (H:\TB_test, 2026-09-10):
@@ -95,7 +102,11 @@ public static class RoadTerrainMerger
     // just point Mutagen straight at whatever Data folder is already there
     // and let it resolve plugins.txt itself. Mirrors
     // SeamFixer.GenerateFixPluginForDirectDataFolder in the sibling
-    // Landscape Seam Fixer tool - same reasoning, same shape.
+    // Landscape Seam Fixer tool - same reasoning, same shape. Ported from
+    // the GitHub packaging repo's own v1.1.0 (2026-09-12, "Wire up Vortex
+    // and Direct game-path modes") - built directly against that repo, not
+    // originally present here, merged back in 2026-09-14 so this dev tree
+    // stays the single source of truth going forward.
     public static RoadMergeResult RunForDirectDataFolder(
         string dataFolderPath,
         string outputPluginName, string outputDirectory,
@@ -132,6 +143,11 @@ public static class RoadTerrainMerger
         public float[,]? OtherHeights { get; init; }
         public ILandscapeGetter? OtherLandscape { get; init; }
         public ModKey OtherModKey { get; init; }
+        // The actual road-source-(or-its-patch) Landscape record height was
+        // sourced from - kept (not just the decoded NrHeights float array) so
+        // the merge step can also read its OWN texture layers, see the
+        // road-texture preservation block in GenerateCore below.
+        public required ILandscapeGetter NrLandscape { get; init; }
         public required bool[,] NrEdited { get; init; }
         public required bool[,] RoadSourced { get; init; }
     }
@@ -170,7 +186,7 @@ public static class RoadTerrainMerger
 
         var outputModKey = ModKey.FromNameAndExtension(outputPluginName);
         var patchMod = new SkyrimMod(outputModKey, SkyrimRelease.SkyrimSE);
-        int merged = 0, fellBack = 0, skipped = 0;
+        int merged = 0, fellBack = 0, skipped = 0, totalRoadTextureLayersPreserved = 0;
 
         // Populated for every cell in the target worldspace (merged or not)
         // so the cross-cell continuity check after the main loop can look up
@@ -301,6 +317,7 @@ public static class RoadTerrainMerger
                 OtherHeights = otherHeights,
                 OtherLandscape = otherLandscape,
                 OtherModKey = otherModKey,
+                NrLandscape = nrLandscape,
                 NrEdited = nrEdited,
                 RoadSourced = new bool[33, 33],
             };
@@ -479,18 +496,100 @@ public static class RoadTerrainMerger
 
             // Based on the OTHER mod's own Landscape record so its texture
             // layers/quadrant data carry forward untouched - only the
-            // height grid itself is replaced. Texture-layer merging along
-            // the road mask is deliberately out of scope for this
+            // height grid itself is replaced. General texture-layer merging
+            // along the road mask stays deliberately out of scope for this
             // prototype (see NOTES.md).
             var newLandscape = ec.OtherLandscape.DeepCopy();
             newLandscape.VertexHeightMap!.Offset = offset;
             for (int y = 0; y <= 32; y++)
             for (int x = 0; x <= 32; x++)
                 newLandscape.VertexHeightMap!.HeightMap[x, y] = deltas[x, y];
+
+            // FIXED 2026-09-14 (real user-found bug): "Other" is resolved by
+            // ResolveWinningLandscapeExcluding, which - correctly, for the
+            // HEIGHT merge above - excludes not just the plain road-source
+            // plugin but any TrustResolver.IsPatchOfTrustedBase match too
+            // (a pure "<road-source stem> -" filename-prefix test). That
+            // exclusion has a side effect nothing here used to correct for:
+            // an NR-family patch can ALSO carry texture-layer edits that
+            // have nothing to do with roads (confirmed real case: "Northern
+            // Roads - Landscape Fixes for Grass Mods patch.esp" painting a
+            // COTN_LDirtDry alpha layer) - since this tool's texture data
+            // comes ENTIRELY from "Other", never from the road-source side,
+            // that layer silently vanished from every cell this tool
+            // touched.
+            //
+            // GENERALIZED 2026-09-14 (same day, user request): the first cut
+            // of this fix matched by a hardcoded "COTN" EditorID prefix -
+            // Northern Roads' own naming convention, confirmed via houseCARL
+            // against all 22 of its LTEX records, but useless for anyone
+            // running this tool with a DIFFERENT `--road-source=` plugin
+            // (already a fully generic setting for the height merge above).
+            // Replaced with a PROVENANCE check instead of a naming
+            // convention: preserve an alpha layer if its texture record was
+            // ITSELF originally defined by the road-source plugin or a
+            // genuine patch of it (same TrustResolver.IsPatchOfTrustedBase
+            // family test the height side already uses) - this is not just
+            // more general, it's more CORRECT than a prefix ever was: it
+            // can't false-positive on an unrelated texture that happens to
+            // share a naming convention, and doesn't silently do nothing for
+            // a road mod that names its textures differently (or not at
+            // all). Deliberately does NOT attempt the general (much riskier,
+            // previously tried-and-reverted - see the 2026-09-14
+            // TextureSeamFixer "untrusted-vs-untrusted" entry in NOTES.md)
+            // job of merging arbitrary texture disagreements. Deliberately
+            // narrow and ADDITIVE ONLY: only adds a layer "Other" doesn't
+            // already carry for that (quadrant, texture) pair - never
+            // overwrites or removes anything from Other's own texture set,
+            // and never touches Base layers (swapping a whole quadrant's
+            // base texture is a far bigger, riskier change than one accent
+            // alpha layer, and not what "the road textures" refers to).
+            int roadTextureLayersPreserved = 0;
+            foreach (var nrLayer in ec.NrLandscape.Layers)
+            {
+                if (nrLayer is not IAlphaLayerGetter nrAlpha) continue;
+                string textureOwner = nrAlpha.Header.Texture.FormKey.ModKey.FileName;
+                var isRoadSourceOwnTexture = textureOwner.Equals(roadSourcePlugin, StringComparison.OrdinalIgnoreCase)
+                    || TrustResolver.IsPatchOfTrustedBase(textureOwner, roadSourcePlugin);
+                if (!isRoadSourceOwnTexture) continue;
+
+                var alreadyPresent = newLandscape.Layers.Any(l =>
+                    l.Header.Quadrant == nrAlpha.Header.Quadrant &&
+                    l.Header.Texture.FormKey == nrAlpha.Header.Texture.FormKey);
+                if (alreadyPresent) continue;
+
+                var quadrantCount = newLandscape.Layers.Count(l => l.Header.Quadrant == nrAlpha.Header.Quadrant);
+                if (quadrantCount >= MaxLayersPerQuadrant)
+                {
+                    log($"  [{ec.WsName}] ({coord.X},{coord.Y}): could not preserve {nrAlpha.Header.Texture.FormKey} in " +
+                        $"{nrAlpha.Header.Quadrant} - quadrant already at the {MaxLayersPerQuadrant}-layer cap.");
+                    continue;
+                }
+
+                var preservedAlphaData = new ExtendedList<AlphaLayerData>();
+                foreach (var d in nrAlpha.AlphaLayerData)
+                    preservedAlphaData.Add(new AlphaLayerData { Position = d.Position, Opacity = d.Opacity });
+
+                newLandscape.Layers.Add(new AlphaLayer
+                {
+                    Header = new LayerHeader
+                    {
+                        Texture = new FormLink<ILandscapeTextureGetter>(nrAlpha.Header.Texture.FormKey),
+                        Quadrant = nrAlpha.Header.Quadrant,
+                        LayerNumber = (ushort)quadrantCount,
+                    },
+                    AlphaLayerData = preservedAlphaData,
+                });
+                roadTextureLayersPreserved++;
+            }
+            totalRoadTextureLayersPreserved += roadTextureLayersPreserved;
+
             writableCell.Landscape = newLandscape;
 
             log($"  [{ec.WsName}] ({coord.X},{coord.Y}): merged {ec.OtherModKey.FileName} + {roadSourcePlugin} " +
-                $"({roadVertexCount}/1089 vertices road-sourced, {iterationsUsed} repair pass(es){(fullRoadFallback ? ", FULL ROAD FALLBACK" : "")}).");
+                $"({roadVertexCount}/1089 vertices road-sourced, {iterationsUsed} repair pass(es)" +
+                $"{(roadTextureLayersPreserved > 0 ? $", {roadTextureLayersPreserved} {roadSourcePlugin} texture layer(s) preserved" : "")}" +
+                $"{(fullRoadFallback ? ", FULL ROAD FALLBACK" : "")}).");
             merged++;
             if (fullRoadFallback) fellBack++;
             mergedCellData[coord] = (ec.OtherHeights, merged33);
@@ -506,7 +605,8 @@ public static class RoadTerrainMerger
             .WithAllParentMasters()
             .Write(patchMod);
 
-        log($"Merged {merged} cell(s) ({fellBack} via full-road fallback), skipped {skipped}.");
+        log($"Merged {merged} cell(s) ({fellBack} via full-road fallback), skipped {skipped}, " +
+            $"{totalRoadTextureLayersPreserved} {roadSourcePlugin} texture layer(s) preserved that would otherwise have been dropped.");
 
         var worsenedBoundaries = CheckCrossCellContinuity(mergedCellData, cellByCoord, linkCache, priorityIndex, log);
         if (worsenedBoundaries == 0)

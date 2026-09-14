@@ -38,16 +38,21 @@ road-network map instead of guesswork:
    Roads - Some Other Mod Patch.esp") and prefers a patch's data over the
    plain road plugin wherever one exists, the same "a patch beats its base"
    rule Landscape Seam Fixer already uses.
-6. Everything else about the cell — textures, water, placed objects — is
-   carried forward completely unchanged from whichever mod already owned
-   it.
+6. Everything else about the cell — water, placed objects — is carried
+   forward completely unchanged from whichever mod already owned it.
+   Texture layers mostly work this way too, with one narrow exception (v1.2.0):
+   the road-source plugin's *own* texture work (whatever it or a genuine
+   patch of it actually painted — checked by who defined the texture
+   record, not by name) is additionally preserved wherever the merge would
+   otherwise have silently dropped it.
 
 ## What it doesn't (yet) do
 
-- **Texture merging.** The road's own road/path textures aren't currently
-  blended into the merged footprint — only height. A cell with correctly
+- **General texture blending.** Beyond preserving the road-source plugin's
+  own texture layers (see above), the road mask footprint isn't used to
+  blend textures the way it's used for height — a cell with correctly
   merged terrain can still show the *other* mod's ground texture underneath
-  it.
+  it wherever the road source didn't paint anything there itself.
 - Cross-cell boundary continuity is handled where both neighboring cells
   have genuine road-mod data to agree on; where the road mod has *no* data
   at all on one side of a boundary, a seam can still show there — there's
