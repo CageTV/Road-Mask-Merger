@@ -1,5 +1,23 @@
 # Road Mask Merger — Changelog
 
+## v1.3.0 — 2026-09-15
+
+**Fixed: stopped writing a pointless null water record into cells that have no water at all.** Found via
+a user's own xEdit screenshot: this tool's water-preservation logic (added to stop it from silently
+DELETING real water) was assigning the water field unconditionally, even for cells with no water — this
+forced an explicit "no water" record into the output where no water record existed at all before,
+harmless in-game but pure noise that then propagated into every other tool built on top of the same
+cell. Now only writes the water field when the cell genuinely has water.
+
+**New: automatic ESL flagging.** The generated patch is now checked for ESL eligibility every run (same
+logic as SSEEdit's own "Find ESP plugins which could be turned into ESL" script) and automatically
+flagged as an ESL if it qualifies — this tool's output almost never adds brand-new records, so it's
+eligible essentially every time.
+
+**New: a `log.txt` and `settings-used.json` are now written into the output folder alongside the
+generated plugin**, matching the other tools in this family — a portable record of exactly what
+happened and what settings produced it, without having to copy text out of the app's log box.
+
 ## v1.2.0 — 2026-09-14
 
 **Fixed a real gap found via a user's own xEdit screenshot**: this tool's road-height merge correctly

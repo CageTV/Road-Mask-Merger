@@ -14,6 +14,7 @@ public partial class MainWindow : Window
 {
     string? _lastFixPluginPath;
     string? _lastOutputFolder;
+    string? _currentLogFilePath;
 
     bool _outputFolderAutoSet = true;
     bool _suppressOutputTextChanged;
@@ -98,6 +99,26 @@ public partial class MainWindow : Window
         catch
         {
             // Best-effort - a locked/inaccessible AppData shouldn't stop the run itself.
+        }
+    }
+
+    // Writes the exact settings a run used into that run's own output
+    // folder too (alongside log.txt/esp), separate from the always-on-launch
+    // copy above - a record of what config produced this particular output,
+    // portable with it if the folder is shared/moved. Matches SeamFinder.UI's
+    // own pattern (added there first; ported here 2026-09-15 for uniformity
+    // across all 5 tools in this family, per the user's explicit request).
+    void SaveSettingsSnapshotToOutputFolder(RunSettings s, string outputFolder)
+    {
+        try
+        {
+            Directory.CreateDirectory(outputFolder);
+            File.WriteAllText(Path.Combine(outputFolder, "settings-used.json"),
+                System.Text.Json.JsonSerializer.Serialize(s, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch
+        {
+            // Best-effort - see SavePersistedSettings.
         }
     }
 
@@ -346,7 +367,9 @@ public partial class MainWindow : Window
 
         var settings = SnapshotSettings();
         var outputFolder = OutputFolderBox.Text.Trim();
+        StartLogFile(outputFolder);
         SavePersistedSettings(settings);
+        SaveSettingsSnapshotToOutputFolder(settings, outputFolder);
 
         try
         {
@@ -420,23 +443,8 @@ public partial class MainWindow : Window
         }
         else
         {
-            var dataFolder = s.IsVortexMode ? s.VortexGameDataPath : s.DirectGameDataPath;
-
-            if (string.IsNullOrEmpty(dataFolder))
-            {
-                ShowValidation("Please fill in the game Data folder.");
-                return null;
-            }
-
-            Log($"Game Data path: {dataFolder}");
-            Log($"Road-source plugin: {s.RoadSourcePlugin}");
-            Log($"Worldspace: {s.Worldspace}");
-            Log($"ACMOS roads folder: {s.AcmosRoadsFolder} ({(s.PathsOnly ? "Paths Only" : "Roads")} variant)");
-            Log("");
-
-            return RoadTerrainMerger.RunForDirectDataFolder(
-                dataFolder, pluginName, outputFolder, Log,
-                s.RoadSourcePlugin, s.AcmosRoadsFolder, s.Worldspace, s.PathsOnly);
+            ShowValidation("Road Mask Merger currently only supports MO2 mode (Vortex/Direct aren't wired up yet).");
+            return null;
         }
     }
 
@@ -470,10 +478,35 @@ public partial class MainWindow : Window
         }
     }
 
+    // Points AppendLog's file mirror at <outputFolder>/log.txt and starts it
+    // fresh (matching LogBox.Clear() for the UI copy) - same folder the esp
+    // for this run lands in. Matches SeamFinder.UI's own pattern.
+    void StartLogFile(string outputFolder)
+    {
+        if (string.IsNullOrEmpty(outputFolder)) { _currentLogFilePath = null; return; }
+        try
+        {
+            Directory.CreateDirectory(outputFolder);
+            _currentLogFilePath = Path.Combine(outputFolder, "log.txt");
+            File.WriteAllText(_currentLogFilePath, "");
+        }
+        catch
+        {
+            // Best-effort - a locked/inaccessible output folder shouldn't
+            // stop the run itself, just the file mirror of its log.
+            _currentLogFilePath = null;
+        }
+    }
+
     void AppendLog(string line)
     {
         LogBox.AppendText(line + Environment.NewLine);
         LogBox.ScrollToEnd();
+        if (_currentLogFilePath is not null)
+        {
+            try { File.AppendAllText(_currentLogFilePath, line + Environment.NewLine); }
+            catch { /* best-effort, see StartLogFile */ }
+        }
     }
 
     // --- Result bar ---

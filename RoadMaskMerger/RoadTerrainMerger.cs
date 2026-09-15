@@ -490,7 +490,22 @@ public static class RoadTerrainMerger
             // whichever cell is ACTUALLY winning right now, the same
             // "preserve what we don't mean to touch" principle already
             // applied to Persistent/Temporary above.
-            writableCell.Water = ec.Context.Record.Water.AsSetter().AsNullable();
+            //
+            // FIXED 2026-09-15 (real user report, confirmed via xEdit + houseCARL
+            // on cell 007159 in the Reach): unconditionally assigning Water even
+            // when the winning cell has none forces Mutagen's writer to emit an
+            // explicit XCWT subrecord with a null FormID (visible in xEdit as
+            // "NULL - Null Reference") where NO override before this one had that
+            // subrecord at all - Skyrim.esm's own base record has no XCWT here
+            // either. Functionally harmless (explicit-null and absent both mean
+            // "no water"), but pure noise this tool has no reason to introduce,
+            // and every downstream tool that builds on top of this cell (Texture
+            // Fixer, PatchForeman) then carries the bogus subrecord forward too.
+            // Only assign when the winning cell genuinely has a water link -
+            // mirrors SeamFixer.cs's own water-restoration code, which already
+            // gets this right (`if (genuineWater.Value.HasWaterLink) writableCell.Water = ...`).
+            if (ec.Context.Record.Water.FormKeyNullable.HasValue)
+                writableCell.Water = ec.Context.Record.Water.AsSetter().AsNullable();
             writableCell.WaterHeight = ec.Context.Record.WaterHeight;
             writableCell.Flags = ec.Context.Record.Flags;
 
@@ -597,6 +612,10 @@ public static class RoadTerrainMerger
 
         Directory.CreateDirectory(outputDirectory);
         var outputPath = Path.Combine(outputDirectory, outputPluginName);
+
+        var eslResult = EslEligibility.CheckAndFlag(patchMod);
+        log(eslResult.Summary);
+
         log($"Writing patch plugin to {outputPath} ...");
         SkyrimMod.WriteBuilder(SkyrimRelease.SkyrimSE)
             .ToPath(outputPath, fileSystem: null)
