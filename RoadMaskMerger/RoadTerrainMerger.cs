@@ -631,11 +631,48 @@ public static class RoadTerrainMerger
             }
             totalRoadTextureLayersPreserved += roadTextureLayersPreserved;
 
+            // Base layer texture reconciliation: a genuine road-source/patch
+            // compat fix isn't always an alpha overlay - it can repaint a
+            // quadrant's BASE ground texture outright (confirmed real case,
+            // 2026-09-15: "UniqueLocationsRiverwood - Northern Roads.esp"
+            // swaps 2 of 4 quadrants' base texture from vanilla dirt to a
+            // road-appropriate ground texture, to match Northern Roads' new
+            // terrain there). The alpha-only preservation loop above can
+            // never see this - it explicitly skips anything that isn't an
+            // IAlphaLayerGetter (see its own comment: "never touches Base
+            // layers"). And "Other" (via ResolveWinningLandscapeExcluding)
+            // never contains the trusted patch's data either, since it's
+            // deliberately excluded as belonging to the road-source family.
+            // Net effect: this exact class of texture fix had no path to
+            // ever reach the merged output - not a one-cell fluke, but
+            // structural for every cell where a Northern-Roads-family patch
+            // fixes a quadrant's BASE texture rather than adding an alpha
+            // overlay. Reconcile per quadrant using the same trust principle
+            // as the height merge above: where the trusted road-source/patch
+            // landscape's base texture disagrees with Other's, prefer the
+            // trusted patch's.
+            int baseLayersReconciled = 0;
+            foreach (var nrLayer in ec.NrLandscape.Layers)
+            {
+                if (nrLayer is IAlphaLayerGetter) continue; // only plain base layers here - the loop above already handled alpha
+                var otherBase = newLandscape.Layers.FirstOrDefault(l =>
+                    l is not IAlphaLayerGetter && l.Header.Quadrant == nrLayer.Header.Quadrant);
+                if (otherBase is null) continue; // shouldn't happen - every quadrant has exactly one base layer
+                if (otherBase.Header.Texture.FormKey == nrLayer.Header.Texture.FormKey) continue; // already agrees
+
+                log($"  [{ec.WsName}] ({coord.X},{coord.Y}): {nrLayer.Header.Quadrant} base texture differs between " +
+                    $"the trusted road-source patch ({nrLayer.Header.Texture.FormKey}) and \"Other\" " +
+                    $"({otherBase.Header.Texture.FormKey}) - preferring the trusted patch's base texture.");
+                otherBase.Header.Texture = new FormLink<ILandscapeTextureGetter>(nrLayer.Header.Texture.FormKey);
+                baseLayersReconciled++;
+            }
+
             writableCell.Landscape = newLandscape;
 
             log($"  [{ec.WsName}] ({coord.X},{coord.Y}): merged {ec.OtherModKey.FileName} + {roadSourcePlugin} " +
                 $"({roadVertexCount}/1089 vertices road-sourced, {iterationsUsed} repair pass(es)" +
                 $"{(roadTextureLayersPreserved > 0 ? $", {roadTextureLayersPreserved} {roadSourcePlugin} texture layer(s) preserved" : "")}" +
+                $"{(baseLayersReconciled > 0 ? $", {baseLayersReconciled} base texture(s) reconciled" : "")}" +
                 $"{(fullRoadFallback ? ", FULL ROAD FALLBACK" : "")}).");
             merged++;
             if (fullRoadFallback) fellBack++;
