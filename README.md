@@ -1,6 +1,6 @@
 # Road Mask Merger
 
-**Current version: 1.1.0** — see [CHANGELOG.md](CHANGELOG.md) for what's new.
+**Current version: 1.3.0** — see [CHANGELOG.md](CHANGELOG.md) for what's new.
 
 A standalone tool for Skyrim Special Edition / Anniversary Edition that
 auto-generates a compatibility patch between a road-shaping mod (Northern
