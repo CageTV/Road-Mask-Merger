@@ -86,6 +86,20 @@ public static class RoadTerrainMerger
                 .WithTargetDataFolder(mergedFolder)
                 .Build();
             var priorityIndex = modKeys.Select((k, idx) => (k, idx)).ToDictionary(x => x.k, x => x.idx);
+            // FIXED 2026-09-15 (real user-reported bug): this call was
+            // missing entirely, unlike SeamFixer.cs/TextureLayerFixer.cs
+            // which both set it - so TrustResolver.IsPatchOfTrustedBase's
+            // masters-based detection path (HasMasterRelationship) could
+            // never fire here, only the "<stem> -" naming-convention check.
+            // A real hand-authored patch named the OTHER way around (e.g.
+            // "UniqueLocationsRiverwood - Northern Roads.esp", prefixed by
+            // what it patches rather than by what it's a patch OF) was
+            // therefore invisible to this tool as a genuine Northern Roads
+            // patch, even though it has Northern Roads.esp as a literal
+            // master - confirmed via a per-vertex height diagnostic showing
+            // this tool sourced road height from a DIFFERENT, unrelated NR
+            // patch instead of the user's own carefully hand-blended one.
+            TrustResolver.SetMastersContext(BuildMastersByPlugin(env.LoadOrder.ListedOrder), outputPluginName);
             return GenerateCore(env.LinkCache, priorityIndex, mergedFolder, outputPluginName, outputDirectory,
                 log, roadSourcePlugin, acmosRoadsFolder, worldspaceFilter, pathsOnly);
         }
@@ -125,8 +139,26 @@ public static class RoadTerrainMerger
             .Select((listing, idx) => (listing.ModKey, idx))
             .ToDictionary(x => x.ModKey, x => x.idx);
 
+        TrustResolver.SetMastersContext(BuildMastersByPlugin(env.LoadOrder.ListedOrder), outputPluginName);
         return GenerateCore(env.LinkCache, priorityIndex, dataFolderPath, outputPluginName, outputDirectory,
             log, roadSourcePlugin, acmosRoadsFolder, worldspaceFilter, pathsOnly);
+    }
+
+    // ESP masters, keyed by filename (not ModKey - matches how every other
+    // trust check in this file compares plugins) - the data-driven signal
+    // HasMasterRelationship uses instead of guessing prefixes. Mirrors
+    // SeamFixer.cs's own BuildMastersByPlugin exactly.
+    static Dictionary<string, HashSet<string>> BuildMastersByPlugin(IEnumerable<Mutagen.Bethesda.Plugins.Order.IModListingGetter<ISkyrimModGetter>> listedOrder)
+    {
+        var result = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var listing in listedOrder)
+        {
+            if (listing.Mod is null) continue;
+            result[listing.ModKey.FileName] = listing.Mod.ModHeader.MasterReferences
+                .Select(m => m.Master.FileName.String)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+        return result;
     }
 
     // Working state for one cell that Northern Roads genuinely edited
@@ -788,6 +820,13 @@ public static class RoadTerrainMerger
             if (ctxFileName.Equals(excludePlugin, StringComparison.OrdinalIgnoreCase)) continue;
             if (ctxFileName.Equals(alsoExcludePlugin, StringComparison.OrdinalIgnoreCase)) continue;
             if (TrustResolver.IsPatchOfTrustedBase(ctxFileName, excludePlugin)) continue;
+            // FIXED 2026-09-15: `alsoExcludePlugin` only ever carried THIS
+            // run's own output name - none of the OTHER 4 sibling tools'
+            // outputs were excluded, so a stale prior LandscapeTextureFixes.esp
+            // (itself downstream of RoadMaskMerge) could get picked up as the
+            // "Other" baseline on a re-run instead of real underlying mod
+            // data. See TrustResolver.SiblingToolOutputs for the full story.
+            if (TrustResolver.SiblingToolOutputs.Contains(ctxFileName)) continue;
             var idx = priorityIndex.GetValueOrDefault(ctx.ModKey, -1);
             if (idx > bestIndex)
             {

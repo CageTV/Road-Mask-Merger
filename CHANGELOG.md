@@ -1,5 +1,22 @@
 # Road Mask Merger — Changelog
 
+## v1.3.1 — 2026-09-15
+
+**Fixed a real seam/height-drop bug, reported by a user with a real hand-authored compatibility
+patch.** This tool never actually wired up its own masters-based "is this a genuine patch of my
+road-source plugin?" detection (a setup call present in the sibling tools but missing here) - so a
+hand-authored patch named the "wrong" way around (patched-mod-first, e.g.
+`SomeMod - Northern Roads.esp` instead of `Northern Roads - SomeMod.esp`) was invisible to this tool
+as a genuine Northern Roads patch, even though it correctly lists Northern Roads as a literal ESP
+master. The practical effect: the tool sourced road height from a completely unrelated Northern Roads
+patch instead of the user's own carefully hand-blended one, producing real seams/bumps on the road and
+height drops exactly where the user had manually reconciled the two mods. Confirmed at the byte level
+via a per-vertex height diagnostic before fixing.
+
+**Also fixed**: this tool's "what wins here besides the road" resolution had no exclusion for this
+toolkit's OWN other sibling tools' output plugins (only its own name) - so a stale prior run of one of
+them could get picked up as the merge baseline instead of the real underlying mod data.
+
 ## v1.3.0 — 2026-09-15
 
 **Fixed: stopped writing a pointless null water record into cells that have no water at all.** Found via
