@@ -1,5 +1,49 @@
 # Road Mask Merger — Changelog
 
+## v1.4.0 — 2026-09-16
+
+**Fixed: Vortex and Direct game-path modes were silently hard-blocked again**, despite v1.1.0's
+changelog entry claiming this was already fixed and despite both UI panels and the backend
+(`RunForDirectDataFolder`) genuinely working. The one piece that was never actually wired up was
+the "Generate Merge Plugin" button's own dispatch logic - it still showed a hard validation error
+for both modes regardless of what was filled in. Reported by a user via Nexus after the v1.3.x
+release; confirmed as a real gap in `MainWindow.xaml.cs`, not a packaging mistake. Both modes now
+call straight through to `RunForDirectDataFolder`, matching the sibling Landscape Seam Fixer tool's
+own equivalent code path.
+
+**Fixed a real texture-drop bug found via a user's own hand-authored compatibility patch**: when a
+genuine patch of the road-source plugin exists for a cell, this tool was still building the texture
+stack from "Other" (deliberately excluding the patch) and only trying to bolt the patch's road
+overlays on top afterward - which regularly failed outright once "Other" had already filled a
+quadrant to the engine's 7-layer cap with its own, unrelated texture layers. Confirmed on the real
+list: 129 "could not preserve ... at the 7-layer cap" drops in one run, including 3 of 5 road-texture
+layers missing entirely in one reported cell. Fixed by using the genuine patch's own Landscape as
+the texture/height foundation instead of rebuilding from "Other" and patching fragments on top -
+verified byte-identical to a user's own trusted hand-authored patch after the fix.
+
+**New: cross-cell boundary-residual detection.** The existing `[BOUNDARY]` check only ever flagged a
+shared edge if THIS merge made it worse than it already was - a huge, genuinely pre-existing mismatch
+between two unrelated mods (confirmed real case: 190 units between QuaintSkyrimFarms.esp and a CC
+Tundra Homestead patch) shipped completely unflagged, even though it's a visible in-game seam. A
+second, independent check now reports any edge left with more than 96 units of mismatch in the final
+output as `[BOUNDARY RESIDUAL]`, regardless of who caused it, restricted to pairs this run actually
+rewrote on both sides (so it doesn't flood the log with ordinary steep vanilla terrain against cells
+this tool never touched).
+
+**New: safe automatic repair for small residual boundaries.** Where two cells this run rewrote still
+disagree at their shared edge by more than 8 but no more than 96 units, the lower-confidence side
+(fewer road-sourced vertices) is snapped to match its neighbor - round-trip encode verified before
+writing, same safety net used everywhere else in this tool. Closed 66 real seams on the real list in
+testing. Anything larger is deliberately left alone and reported instead, to avoid the "floating
+terrain chunk" regression class this same project hit once already when a repair pass didn't respect
+a strict magnitude cap.
+
+**Fixed a crash that could silently abort a full-map run partway through.** A single road-mask tile
+that fails to load via `System.Drawing.Bitmap` (confirmed as GDI+ resource exhaustion after loading
+100+ tiles in one process, not file corruption - every tile loads fine individually) used to take
+down the entire generation run with no output at all. A failed tile load is now treated as "no road
+data here" (same as a genuinely missing tile) with a one-time warning, so the run completes instead.
+
 ## v1.3.1 — 2026-09-15
 
 **Fixed a real seam/height-drop bug, reported by a user with a real hand-authored compatibility

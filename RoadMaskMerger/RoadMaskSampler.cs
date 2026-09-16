@@ -22,6 +22,14 @@ public sealed class RoadMaskSampler : IDisposable
 
     readonly string _tilesRoot; // .../roads/<Roads|Paths Only>/<worldspace lowercase>
     readonly Dictionary<(int TileX, int TileY), Bitmap?> _tileCache = new();
+    readonly HashSet<string> _warnedTiles = new();
+    Action<string>? _log;
+
+    // Set by the caller so a per-tile load failure can be reported instead of
+    // silently swallowed - see GetTile below for why this can legitimately
+    // happen even against a verified-good tile set (GDI+ resource exhaustion
+    // under a constrained handle quota, not necessarily file corruption).
+    public Action<string>? Log { set => _log = value; }
 
     // alphaThreshold: ACMOS's road overlay carries the road shape mostly in
     // the ALPHA channel (the RGB itself is closer to a neutral asphalt
@@ -69,7 +77,31 @@ public sealed class RoadMaskSampler : IDisposable
         // signed tile coordinates as plain integers (e.g. "tamriel.32.-32.0.png").
         var wsName = Path.GetFileName(_tilesRoot);
         var path = Path.Combine(_tilesRoot, $"{wsName}.32.{tileX}.{tileY}.png");
-        Bitmap? bmp = File.Exists(path) ? new Bitmap(path) : null;
+        Bitmap? bmp = null;
+        if (File.Exists(path))
+        {
+            try
+            {
+                bmp = new Bitmap(path);
+            }
+            catch (Exception ex)
+            {
+                // A single unloadable tile must never abort a run processing
+                // thousands of cells across the whole worldspace - confirmed
+                // reproducible (2026-09-15) as a generic GDI+ ArgumentException
+                // from System.Drawing.Bitmap on a verified-valid PNG (checked
+                // byte-for-byte against a standalone load that succeeded),
+                // consistent with GDI+ handle-quota exhaustion after loading
+                // ~100+ tiles in one process under a constrained environment -
+                // NOT necessarily file corruption. Treating a failed tile as
+                // "no road data here" (same as a genuinely missing tile) is
+                // the safe fallback: worst case, a few cells near that one
+                // tile don't get road-merged this run, which is far better
+                // than the whole run dying partway through and merging NOTHING.
+                if (_warnedTiles.Add(path))
+                    _log?.Invoke($"  WARNING: could not load road-mask tile '{Path.GetFileName(path)}' ({ex.GetType().Name}: {ex.Message}) - treating this tile as \"no road data\" and continuing.");
+            }
+        }
         _tileCache[key] = bmp;
         return bmp;
     }
