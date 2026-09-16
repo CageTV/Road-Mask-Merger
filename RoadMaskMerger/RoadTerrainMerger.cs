@@ -182,6 +182,11 @@ public static class RoadTerrainMerger
         public required ILandscapeGetter NrLandscape { get; init; }
         public required bool[,] NrEdited { get; init; }
         public required bool[,] RoadSourced { get; init; }
+        // True when NrLandscape is a genuine hand-authored compatibility
+        // patch (nrPatchLandscape in Pass A), not just the plain road-source
+        // plugin - see the texture-foundation comment in Pass C for why this
+        // changes which Landscape the merge builds its texture stack from.
+        public required bool IsGenuinePatch { get; init; }
     }
 
     static RoadMergeResult GenerateCore(
@@ -352,6 +357,7 @@ public static class RoadTerrainMerger
                 NrLandscape = nrLandscape,
                 NrEdited = nrEdited,
                 RoadSourced = new bool[33, 33],
+                IsGenuinePatch = nrPatchLandscape is not null,
             };
         }
 
@@ -541,12 +547,35 @@ public static class RoadTerrainMerger
             writableCell.WaterHeight = ec.Context.Record.WaterHeight;
             writableCell.Flags = ec.Context.Record.Flags;
 
-            // Based on the OTHER mod's own Landscape record so its texture
-            // layers/quadrant data carry forward untouched - only the
-            // height grid itself is replaced. General texture-layer merging
-            // along the road mask stays deliberately out of scope for this
-            // prototype (see NOTES.md).
-            var newLandscape = ec.OtherLandscape.DeepCopy();
+            // FOUND AS A REAL BUG 2026-09-16 (user-reported, confirmed via
+            // xEdit screenshots showing the WINNING genuine patch's own
+            // texture at a given layer slot - e.g. COTN_LRoadDirt02 at
+            // Layer 3 - while RoadMaskMerge.esp kept "Other"'s stale texture
+            // at that same slot (e.g. LRocks01NoRocks) and only bolted the
+            // road texture on as a brand-new extra layer instead of letting
+            // the patch's own data win the slot it already owns): building
+            // the texture stack from "Other" and then trying to ADD the
+            // patch's road layers on top only ever helps where Other is
+            // missing that exact texture ID entirely - it can never REPLACE
+            // a slot Other already occupies with something else, even when
+            // the winning patch's own record for that same slot says
+            // otherwise. A genuine hand-authored compatibility patch (like
+            // "UniqueLocationsRiverwood - Northern Roads.esp") already
+            // reconciled height AND texture together for this cell, verified
+            // in-game by its own author - rebuilding from a WORSE, unrelated
+            // "Other" source and patching fragments back on top can only
+            // lose data the original never needed fixed.
+            //
+            // Fix: when a genuine patch exists (ec.IsGenuinePatch), its OWN
+            // Landscape becomes the texture (and normals/colors) foundation
+            // instead of Other's - only the height grid still gets replaced
+            // below, same as always. The per-vertex NR-texture merge loop
+            // further down becomes a no-op for these cells (everything it
+            // would add is already present, since it's the same source), and
+            // keeps doing its real job unchanged for cells with no genuine
+            // patch (plain road-source plugin only, where Other really is
+            // the only reasonable texture foundation).
+            var newLandscape = (ec.IsGenuinePatch ? ec.NrLandscape : ec.OtherLandscape!).DeepCopy();
             newLandscape.VertexHeightMap!.Offset = offset;
             for (int y = 0; y <= 32; y++)
             for (int x = 0; x <= 32; x++)

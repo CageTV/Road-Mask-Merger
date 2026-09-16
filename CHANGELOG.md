@@ -1,5 +1,30 @@
 # Road Mask Merger — Changelog
 
+## v1.3.4 — 2026-09-16
+
+**Real bug found via the user's own xEdit screenshot**, comparing the winning genuine patch's
+texture layers directly against RoadMaskMerge.esp's output slot-by-slot: at Layer 3, the winning
+patch (`UniqueLocationsRiverwood - Northern Roads.esp`) had `COTN_LRoadDirt02`, but
+RoadMaskMerge.esp kept URF's stale `LRocks01NoRocks` at that same slot and only bolted the road
+texture on as a brand-new extra layer instead. Root cause: v1.3.3's texture stack was always built
+from "Other" (URF), and the per-vertex merge loop can only ADD a texture ID that's completely
+absent from a quadrant — it can never REPLACE a slot Other already occupies with something else,
+even when the winning patch's own record for that same slot says otherwise.
+
+**Fix**: when a genuine hand-authored compatibility patch exists for a cell (this tool already
+detects this for the height merge), that patch's OWN Landscape record now becomes the texture
+foundation instead of "Other" — a patch like this already reconciled height AND texture together,
+verified in-game by its own author, so rebuilding from a worse, unrelated source and patching
+fragments back on top only loses data the original never needed fixed. Only the height grid itself
+still gets replaced on top, same as always. (This is the texture-foundation fix from the reverted
+v1.4.0 — that revert was about the unrelated boundary-snap regression, not this fix, which is
+reintroduced standalone here.)
+
+Verified against the real live profile: the user's exact reported cell now shows
+`COTN_LRoadDirt02`/`COTN_LRoadMud` directly at their real layer slots in all four quadrants (up
+from 2 quadrants via a redundant extra layer), with no stale URF texture left behind. Still
+855/855 cells merged clean, 0 skipped.
+
 ## v1.3.3 — 2026-09-16
 
 **Real bug found via the user's own xEdit screenshots**, comparing this tool's output against the
