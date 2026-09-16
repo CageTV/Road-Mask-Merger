@@ -581,17 +581,38 @@ public static class RoadTerrainMerger
             // can't false-positive on an unrelated texture that happens to
             // share a naming convention, and doesn't silently do nothing for
             // a road mod that names its textures differently (or not at
-            // all). Deliberately does NOT attempt the general (much riskier,
+            // all).
+            //
+            // REBUILT 2026-09-16 (real user report: "1.3.1 is not doing the
+            // Northern Roads textures") from a QUADRANT-presence check to a
+            // real PER-VERTEX merge. The old version only ever added NR's
+            // texture layer when "Other" had ZERO trace of that exact
+            // texture anywhere in the whole quadrant - so the moment Other's
+            // own data touched that texture ID anywhere in the quadrant
+            // (even a single unrelated corner), NR's actual road paint was
+            // skipped for the ENTIRE quadrant, including the vertices the
+            // road genuinely runs through. That's the same class of gap this
+            // tool's HEIGHT merge already solved (Pass 1's
+            // `RoadSourced[x,y] ? NrHeights : OtherHeights` per-vertex
+            // selection) - texture now follows the exact same rule and the
+            // exact same trust boundary: wherever RoadSourced[x,y] is true
+            // (this run already decided NR's own height wins there), NR's
+            // own real per-vertex opacity for its road textures wins there
+            // too, merged into the corresponding quadrant/texture layer
+            // (creating it if absent, respecting the 7-layer cap) rather
+            // than skipped outright or duplicated as a stray extra layer.
+            // Untouched vertices (RoadSourced false) keep Other's own alpha
+            // data exactly as before - still additive/selective, never a
+            // wholesale quadrant repaint, and never touches Base layers.
+            //
+            // Deliberately does NOT attempt the general (much riskier,
             // previously tried-and-reverted - see the 2026-09-14
             // TextureSeamFixer "untrusted-vs-untrusted" entry in NOTES.md)
-            // job of merging arbitrary texture disagreements. Deliberately
-            // narrow and ADDITIVE ONLY: only adds a layer "Other" doesn't
-            // already carry for that (quadrant, texture) pair - never
-            // overwrites or removes anything from Other's own texture set,
-            // and never touches Base layers (swapping a whole quadrant's
-            // base texture is a far bigger, riskier change than one accent
-            // alpha layer, and not what "the road textures" refers to).
-            int roadTextureLayersPreserved = 0;
+            // job of merging arbitrary texture disagreements between two
+            // UNTRUSTED mods - this only ever moves data FROM the already-
+            // trusted road source TO exactly the vertices the height merge
+            // already trusted it for, nothing more.
+            int roadTextureLayersMerged = 0;
             foreach (var nrLayer in ec.NrLandscape.Layers)
             {
                 if (nrLayer is not IAlphaLayerGetter nrAlpha) continue;
@@ -600,42 +621,80 @@ public static class RoadTerrainMerger
                     || TrustResolver.IsPatchOfTrustedBase(textureOwner, roadSourcePlugin);
                 if (!isRoadSourceOwnTexture) continue;
 
-                var alreadyPresent = newLandscape.Layers.Any(l =>
+                // Reshape NR's sparse (Position,Opacity) list into the
+                // confirmed 17x17 quadrant-local grid (row=Position/17=Y,
+                // col=Position%17=X - see TextureBoundaryAnalyzer.cs in the
+                // sibling TextureSeamFixer tool for the empirical proof of
+                // this layout against real game data) and pick out only the
+                // vertices this run's flood-fill actually marked road-
+                // sourced, translated into the same quadrant-local index
+                // space via QuadrantOffset below.
+                var (offsetX, offsetY) = QuadrantOffset(nrAlpha.Header.Quadrant);
+                var roadVertexOpacity = new Dictionary<ushort, float>(); // quadrant-local Position -> opacity
+                if (nrAlpha.AlphaLayerData is not null)
+                {
+                    foreach (var d in nrAlpha.AlphaLayerData)
+                    {
+                        int row = d.Position / 17, col = d.Position % 17;
+                        if (row is < 0 or > 16 || col is < 0 or > 16) continue;
+                        int gx = offsetX + col, gy = offsetY + row;
+                        if (!ec.RoadSourced[gx, gy]) continue; // not a vertex the height merge trusted NR for - leave Other's own data alone here
+                        roadVertexOpacity[d.Position] = d.Opacity;
+                    }
+                }
+                if (roadVertexOpacity.Count == 0) continue; // NR paints this texture here, but none of it lands on a road-sourced vertex
+
+                var existingLayer = newLandscape.Layers.OfType<AlphaLayer>().FirstOrDefault(l =>
                     l.Header.Quadrant == nrAlpha.Header.Quadrant &&
                     l.Header.Texture.FormKey == nrAlpha.Header.Texture.FormKey);
-                if (alreadyPresent) continue;
 
-                var quadrantCount = newLandscape.Layers.Count(l => l.Header.Quadrant == nrAlpha.Header.Quadrant);
-                if (quadrantCount >= MaxLayersPerQuadrant)
+                AlphaLayer targetLayer;
+                if (existingLayer is not null)
                 {
-                    log($"  [{ec.WsName}] ({coord.X},{coord.Y}): could not preserve {nrAlpha.Header.Texture.FormKey} in " +
-                        $"{nrAlpha.Header.Quadrant} - quadrant already at the {MaxLayersPerQuadrant}-layer cap.");
-                    continue;
+                    targetLayer = existingLayer;
+                }
+                else
+                {
+                    var quadrantCount = newLandscape.Layers.Count(l => l.Header.Quadrant == nrAlpha.Header.Quadrant);
+                    if (quadrantCount >= MaxLayersPerQuadrant)
+                    {
+                        log($"  [{ec.WsName}] ({coord.X},{coord.Y}): could not merge {nrAlpha.Header.Texture.FormKey} in " +
+                            $"{nrAlpha.Header.Quadrant} - quadrant already at the {MaxLayersPerQuadrant}-layer cap.");
+                        continue;
+                    }
+                    targetLayer = new AlphaLayer
+                    {
+                        Header = new LayerHeader
+                        {
+                            Texture = new FormLink<ILandscapeTextureGetter>(nrAlpha.Header.Texture.FormKey),
+                            Quadrant = nrAlpha.Header.Quadrant,
+                            LayerNumber = (ushort)quadrantCount,
+                        },
+                        AlphaLayerData = new ExtendedList<AlphaLayerData>(),
+                    };
+                    newLandscape.Layers.Add(targetLayer);
                 }
 
-                var preservedAlphaData = new ExtendedList<AlphaLayerData>();
-                foreach (var d in nrAlpha.AlphaLayerData)
-                    preservedAlphaData.Add(new AlphaLayerData { Position = d.Position, Opacity = d.Opacity });
+                // Merge by Position: road-sourced vertices take NR's real
+                // opacity (overwriting whatever Other had there, if
+                // anything - same "NR wins where the height merge already
+                // trusted it" rule); every other position Other's own layer
+                // already carried is left exactly as it was.
+                var mergedAlpha = targetLayer.AlphaLayerData!.ToDictionary(d => d.Position, d => d.Opacity);
+                foreach (var (position, opacity) in roadVertexOpacity)
+                    mergedAlpha[position] = opacity;
+                targetLayer.AlphaLayerData = new ExtendedList<AlphaLayerData>(
+                    mergedAlpha.Select(kv => new AlphaLayerData { Position = kv.Key, Opacity = kv.Value }));
 
-                newLandscape.Layers.Add(new AlphaLayer
-                {
-                    Header = new LayerHeader
-                    {
-                        Texture = new FormLink<ILandscapeTextureGetter>(nrAlpha.Header.Texture.FormKey),
-                        Quadrant = nrAlpha.Header.Quadrant,
-                        LayerNumber = (ushort)quadrantCount,
-                    },
-                    AlphaLayerData = preservedAlphaData,
-                });
-                roadTextureLayersPreserved++;
+                roadTextureLayersMerged++;
             }
-            totalRoadTextureLayersPreserved += roadTextureLayersPreserved;
+            totalRoadTextureLayersPreserved += roadTextureLayersMerged;
 
             writableCell.Landscape = newLandscape;
 
             log($"  [{ec.WsName}] ({coord.X},{coord.Y}): merged {ec.OtherModKey.FileName} + {roadSourcePlugin} " +
                 $"({roadVertexCount}/1089 vertices road-sourced, {iterationsUsed} repair pass(es)" +
-                $"{(roadTextureLayersPreserved > 0 ? $", {roadTextureLayersPreserved} {roadSourcePlugin} texture layer(s) preserved" : "")}" +
+                $"{(roadTextureLayersMerged > 0 ? $", {roadTextureLayersMerged} {roadSourcePlugin} texture layer(s) merged" : "")}" +
                 $"{(fullRoadFallback ? ", FULL ROAD FALLBACK" : "")}).");
             merged++;
             if (fullRoadFallback) fellBack++;
@@ -794,6 +853,25 @@ public static class RoadTerrainMerger
             max = Math.Max(max, Math.Abs(a[x, y] - b[x, y]));
         return max;
     }
+
+    // Global-vertex (33x33 cell grid) origin of a quadrant's own 17x17 local
+    // alpha grid - the other half of the confirmed layout
+    // TextureBoundaryAnalyzer.cs in the sibling TextureSeamFixer tool
+    // documents (row=Y, col=X within the quadrant). BottomLeft/BottomRight
+    // split the cell at global x=16 (BottomRight's local col 0 = global
+    // x=16); BottomLeft/TopLeft split at global y=16 (TopLeft's local row 0
+    // = global y=16) - i.e. exactly the same halves HeightmapDecoder's own
+    // 33x33 VertexHeightMap grid is split into by RoadSourced[x,y], so a
+    // quadrant's local (row,col) and the height grid's global (x,y) it
+    // overlaps are related by a simple, fixed per-quadrant offset.
+    static (int OffsetX, int OffsetY) QuadrantOffset(Quadrant q) => q switch
+    {
+        Quadrant.BottomLeft => (0, 0),
+        Quadrant.BottomRight => (16, 0),
+        Quadrant.TopLeft => (0, 16),
+        Quadrant.TopRight => (16, 16),
+        _ => throw new ArgumentOutOfRangeException(nameof(q), q, "Unexpected Quadrant value"),
+    };
 
     // Same walk as HeightmapDecoder.ResolveWinningLandscape, but skipping
     // any context owned by the road-source plugin, ANY genuine patch of it

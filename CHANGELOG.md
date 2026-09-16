@@ -1,5 +1,35 @@
 # Road Mask Merger — Changelog
 
+## v1.3.2 — 2026-09-16
+
+**Real per-vertex road-texture merging, on top of the v1.3.1 baseline (v1.4.x is reverted — see
+below).** The texture-preservation logic only ever added a Northern Roads texture layer when the
+"Other" mod had *zero* trace of that exact texture anywhere in the whole quadrant — so the moment
+Other's own data touched that texture ID anywhere in the quadrant (even one unrelated corner), NR's
+actual road paint was skipped for the entire quadrant, including the vertices the road genuinely
+runs through. User-reported: "1.3.1 is not doing the Northern Roads textures."
+
+Rewritten to merge per-vertex using the exact same `RoadSourced` grid the height merge already
+computes and trusts: wherever this run already decided NR's own height wins at a vertex, NR's own
+real per-vertex texture opacity now wins there too, merged into the matching quadrant/texture layer
+(creating it if absent, respecting the existing 7-layer-per-quadrant cap) instead of being skipped
+outright. Untouched vertices keep Other's own alpha data exactly as before — still additive/
+selective, never a wholesale quadrant repaint, never touches Base layers.
+
+Verified against the real live profile before release: 1,379 Northern Roads texture layers merged
+across 647 of 855 cells this run touches (up from the old presence-only check). Confirmed via a
+byte-level check that a cell showing 0 merged layers (ChillfurrowFarmEdge) correctly has no
+available road-texture data to merge — both the road-source patch and plain Northern Roads.esp
+carry only vanilla Skyrim.esm textures there, byte-identical; Northern Roads never painted a road
+texture at that specific cell, so there was nothing to merge.
+
+**Note on v1.4.0/v1.4.1**: those versions (Vortex/Direct-mode dispatch fix, tile-load crash fix,
+texture-foundation-from-genuine-patch fix, and the boundary-residual auto-snap feature) were
+reverted after the boundary-residual auto-snap caused a real in-game regression (dropped/pit
+quadrants at multiple cells) that a follow-up patch (v1.4.1) did not fully resolve. This release is
+built directly on the v1.3.1 baseline, not on v1.4.x. The three unrelated fixes from v1.4.0 are not
+included here and would need to be re-applied separately if wanted.
+
 ## v1.3.1 — 2026-09-15
 
 **Fixed a real seam/height-drop bug, reported by a user with a real hand-authored compatibility
