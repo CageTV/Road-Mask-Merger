@@ -20,16 +20,6 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <!-- Confirmed real deployment bug 2026-09-15: System.Drawing.Common's
-         Windows GDI+ backend (System.Private.Windows.GdiPlus) is only
-         bundled by the WindowsDesktop shared framework, which a plain
-         console app never references unless it opts into either WPF or
-         WinForms. RoadMaskSampler.cs uses System.Drawing.Bitmap to read
-         the bundled ACMOS road-mask PNGs - without this, the self-contained
-         published exe throws FileNotFoundException for that assembly the
-         moment it tries to load a mask. WinForms (not WPF) is the minimal
-         opt-in that pulls in the same GDI+ backend for a console app. -->
-    <UseWindowsForms>true</UseWindowsForms>
   </PropertyGroup>
 
 </Project>

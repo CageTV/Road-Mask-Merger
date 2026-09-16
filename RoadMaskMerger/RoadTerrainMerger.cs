@@ -65,35 +65,6 @@ public static class RoadTerrainMerger
     // up as an error of hundreds to thousands of units, not single digits).
     const float RoundTripToleranceUnits = 10f;
 
-    // How many vertices inward from a snapped boundary edge
-    // ReconcileEdge fades its correction over, instead of applying it only
-    // to the single edge row/column - see that method's 2026-09-16 fix
-    // comment for the real in-game regression this closes. 8 keeps the
-    // steepest single vertex-to-vertex step this can ever introduce at or
-    // below LargeResidualThresholdUnits/8 = 12 units - gentler than the
-    // 96-unit band this method is scoped to fixing in the first place.
-    const int TaperWidthVertices = 8;
-
-    // Round-trip tolerance for THIS reconciliation pass specifically -
-    // deliberately looser than the general-purpose RoundTripToleranceUnits
-    // (10 units, tuned for ordinary Offset misalignment noise between two
-    // real mods' authored data, ~3.2 units typical). VHGT's per-row delta
-    // chain rounds every vertex-to-vertex step to the nearest 8 units, and
-    // DecodeForVerification reconstructs by CUMULATIVE SUM - so spreading a
-    // correction across TaperWidthVertices steps (instead of the old
-    // single-vertex snap, which only ever needed one rounding step)
-    // necessarily compounds a few units of rounding noise per step along
-    // the band. Measured against the real live profile before picking this
-    // value: worst case 46 units, typical 13-30, across 90 real eligible
-    // boundaries. That noise is still nowhere near the "hundreds to
-    // thousands of units" signature RoundTripToleranceUnits exists to catch
-    // (a genuinely broken encode) - and even with the noise, the actual
-    // written geometry is still far gentler than the single un-softened
-    // 96-unit cliff this taper replaces. 50 comfortably clears the measured
-    // worst case while still rejecting anything that looks like a real
-    // encode failure.
-    const float TaperReconcileRoundTripToleranceUnits = 50f;
-
     public static RoadMergeResult RunForResolvedPlugins(
         List<Mo2Resolver.ResolvedPlugin> loadOrder,
         string outputPluginName, string outputDirectory,
@@ -211,11 +182,6 @@ public static class RoadTerrainMerger
         public required ILandscapeGetter NrLandscape { get; init; }
         public required bool[,] NrEdited { get; init; }
         public required bool[,] RoadSourced { get; init; }
-        // True when NrLandscape is a genuine hand-authored compatibility
-        // patch (nrPatchLandscape in Pass A), not just the plain road-source
-        // plugin - see the texture-foundation comment in Pass C for why this
-        // changes which Landscape the merge builds its texture stack from.
-        public required bool IsGenuinePatch { get; init; }
     }
 
     static RoadMergeResult GenerateCore(
@@ -230,7 +196,7 @@ public static class RoadTerrainMerger
         string worldspaceFilter,
         bool pathsOnly)
     {
-        using var roadMask = new RoadMaskSampler(acmosRoadsFolder, worldspaceFilter, pathsOnly) { Log = log };
+        using var roadMask = new RoadMaskSampler(acmosRoadsFolder, worldspaceFilter, pathsOnly);
         if (!roadMask.IsAvailable)
         {
             // Throwing here (rather than returning a "successful" empty
@@ -265,11 +231,6 @@ public static class RoadTerrainMerger
         // boundary mismatch exists at all (which could be a pre-existing,
         // unrelated seam this tool had nothing to do with).
         var mergedCellData = new Dictionary<(int X, int Y), (float[,] Before, float[,] After)>();
-        // The actual Cell record this run wrote into patchMod, keyed the same
-        // way as mergedCellData - needed so ReconcileResidualBoundaries below
-        // can mutate a cell's ALREADY-WRITTEN VertexHeightMap in place after
-        // the fact, instead of just measuring it.
-        var writableCellByCoord = new Dictionary<(int X, int Y), Cell>();
 
         // ---- Pass A: collect every cell in the target worldspace and work
         // out which ones Northern Roads genuinely edited SOMEWHERE (its own
@@ -391,7 +352,6 @@ public static class RoadTerrainMerger
                 NrLandscape = nrLandscape,
                 NrEdited = nrEdited,
                 RoadSourced = new bool[33, 33],
-                IsGenuinePatch = nrPatchLandscape is not null,
             };
         }
 
@@ -581,39 +541,12 @@ public static class RoadTerrainMerger
             writableCell.WaterHeight = ec.Context.Record.WaterHeight;
             writableCell.Flags = ec.Context.Record.Flags;
 
-            // FOUND AS A REAL BUG 2026-09-15 (user-reported, confirmed via
-            // in-game comparison + houseCARL): when a GENUINE hand-authored
-            // patch exists (ec.IsGenuinePatch), building the texture stack
-            // from "Other" and then trying to bolt the patch's road-texture
-            // alpha layers on top as an afterthought regularly fails
-            // outright - "Other" (some OTHER mod, chosen specifically
-            // because it is NOT the patch) can already fill a quadrant to
-            // the engine's 7-layer cap with ITS OWN unrelated texture
-            // layers, leaving zero room left for the patch's road overlay.
-            // Confirmed on the real list: 129 "could not preserve ... at
-            // the 7-layer cap" drops in one run, including 3 of the 5 road-
-            // texture layers in the exact cell the user reported ((6,-9) in
-            // Tamriel) missing entirely - the visible symptom was two of
-            // four quadrants showing bare grass-base color with no road
-            // texture painted over it at all, not a subtle blend error.
-            //
-            // The real fix isn't a bigger cap or smarter dedup - it's
-            // recognizing "Other" was never the right foundation for a cell
-            // a human already reconciled by hand. A genuine compatibility
-            // patch's author (confirmed directly by this patch's own
-            // author) already solved height AND texture together, verified
-            // in-game, for this exact cell - rebuilding it from a WORSE,
-            // unrelated source and patching fragments back on top can only
-            // lose data the original never needed to fix. When a genuine
-            // patch exists, its OWN Landscape becomes the texture (and
-            // normals/colors) foundation instead of Other's - only the
-            // height grid still gets replaced below, same as always. The
-            // alpha-preservation loop and base-layer reconciliation further
-            // down become harmless no-ops for these cells (everything they'd
-            // add is already present, since it's the same source), and keep
-            // doing their real job unchanged for cells with no genuine patch
-            // (plain road-source plugin only).
-            var newLandscape = (ec.IsGenuinePatch ? ec.NrLandscape : ec.OtherLandscape!).DeepCopy();
+            // Based on the OTHER mod's own Landscape record so its texture
+            // layers/quadrant data carry forward untouched - only the
+            // height grid itself is replaced. General texture-layer merging
+            // along the road mask stays deliberately out of scope for this
+            // prototype (see NOTES.md).
+            var newLandscape = ec.OtherLandscape.DeepCopy();
             newLandscape.VertexHeightMap!.Offset = offset;
             for (int y = 0; y <= 32; y++)
             for (int x = 0; x <= 32; x++)
@@ -698,56 +631,16 @@ public static class RoadTerrainMerger
             }
             totalRoadTextureLayersPreserved += roadTextureLayersPreserved;
 
-            // Base layer texture reconciliation: a genuine road-source/patch
-            // compat fix isn't always an alpha overlay - it can repaint a
-            // quadrant's BASE ground texture outright (confirmed real case,
-            // 2026-09-15: "UniqueLocationsRiverwood - Northern Roads.esp"
-            // swaps 2 of 4 quadrants' base texture from vanilla dirt to a
-            // road-appropriate ground texture, to match Northern Roads' new
-            // terrain there). The alpha-only preservation loop above can
-            // never see this - it explicitly skips anything that isn't an
-            // IAlphaLayerGetter (see its own comment: "never touches Base
-            // layers"). And "Other" (via ResolveWinningLandscapeExcluding)
-            // never contains the trusted patch's data either, since it's
-            // deliberately excluded as belonging to the road-source family.
-            // Net effect: this exact class of texture fix had no path to
-            // ever reach the merged output - not a one-cell fluke, but
-            // structural for every cell where a Northern-Roads-family patch
-            // fixes a quadrant's BASE texture rather than adding an alpha
-            // overlay. Reconcile per quadrant using the same trust principle
-            // as the height merge above: where the trusted road-source/patch
-            // landscape's base texture disagrees with Other's, prefer the
-            // trusted patch's.
-            int baseLayersReconciled = 0;
-            foreach (var nrLayer in ec.NrLandscape.Layers)
-            {
-                if (nrLayer is IAlphaLayerGetter) continue; // only plain base layers here - the loop above already handled alpha
-                var otherBase = newLandscape.Layers.FirstOrDefault(l =>
-                    l is not IAlphaLayerGetter && l.Header.Quadrant == nrLayer.Header.Quadrant);
-                if (otherBase is null) continue; // shouldn't happen - every quadrant has exactly one base layer
-                if (otherBase.Header.Texture.FormKey == nrLayer.Header.Texture.FormKey) continue; // already agrees
-
-                log($"  [{ec.WsName}] ({coord.X},{coord.Y}): {nrLayer.Header.Quadrant} base texture differs between " +
-                    $"the trusted road-source patch ({nrLayer.Header.Texture.FormKey}) and \"Other\" " +
-                    $"({otherBase.Header.Texture.FormKey}) - preferring the trusted patch's base texture.");
-                otherBase.Header.Texture = new FormLink<ILandscapeTextureGetter>(nrLayer.Header.Texture.FormKey);
-                baseLayersReconciled++;
-            }
-
             writableCell.Landscape = newLandscape;
 
             log($"  [{ec.WsName}] ({coord.X},{coord.Y}): merged {ec.OtherModKey.FileName} + {roadSourcePlugin} " +
                 $"({roadVertexCount}/1089 vertices road-sourced, {iterationsUsed} repair pass(es)" +
                 $"{(roadTextureLayersPreserved > 0 ? $", {roadTextureLayersPreserved} {roadSourcePlugin} texture layer(s) preserved" : "")}" +
-                $"{(baseLayersReconciled > 0 ? $", {baseLayersReconciled} base texture(s) reconciled" : "")}" +
                 $"{(fullRoadFallback ? ", FULL ROAD FALLBACK" : "")}).");
             merged++;
             if (fullRoadFallback) fellBack++;
             mergedCellData[coord] = (ec.OtherHeights, merged33);
-            writableCellByCoord[coord] = writableCell;
         }
-
-        ReconcileResidualBoundaries(mergedCellData, writableCellByCoord, eligibleCells, log);
 
         Directory.CreateDirectory(outputDirectory);
         var outputPath = Path.Combine(outputDirectory, outputPluginName);
@@ -766,7 +659,7 @@ public static class RoadTerrainMerger
         log($"Merged {merged} cell(s) ({fellBack} via full-road fallback), skipped {skipped}, " +
             $"{totalRoadTextureLayersPreserved} {roadSourcePlugin} texture layer(s) preserved that would otherwise have been dropped.");
 
-        var (worsenedBoundaries, residualBoundaries) = CheckCrossCellContinuity(mergedCellData, cellByCoord, linkCache, priorityIndex, log);
+        var worsenedBoundaries = CheckCrossCellContinuity(mergedCellData, cellByCoord, linkCache, priorityIndex, log);
         if (worsenedBoundaries == 0)
             log("Cross-cell boundary continuity: no boundary was made worse by this merge.");
         else
@@ -776,12 +669,6 @@ public static class RoadTerrainMerger
                 "region-growing flood-fill now crosses cell boundaries and forces agreement there (NOTES.md, \"Pass " +
                 "B\"). A residual warning here means Northern Roads has NO genuine edit at all on the OTHER side of " +
                 "that specific boundary, so there is no NR data left to safely extend into - review it in-game.");
-        if (residualBoundaries > 0)
-            log($"Cross-cell boundary continuity: {residualBoundaries} shared edge(s) still carry a LARGE pre-existing " +
-                "mismatch this merge did not create (so it isn't counted as \"worsened\" above) but also did not close - " +
-                "see the [BOUNDARY RESIDUAL] lines above. These are visible-in-game seams between two unrelated third-party " +
-                "mods' terrain (not this tool's road logic) that ship unflagged into the final .esp unless reported here - " +
-                "review them in-game.");
 
         return new RoadMergeResult(merged, fellBack, skipped, outputPath);
     }
@@ -819,159 +706,7 @@ public static class RoadTerrainMerger
     // NOTES.md). Only flags a boundary as a problem if THIS merge made it
     // WORSE than it already was pre-merge - a pre-existing mismatch this
     // tool had nothing to do with isn't this tool's fault to report.
-    // Actively closes a residual boundary mismatch between two cells THIS
-    // RUN rewrote, rather than just reporting it. Scope is deliberately
-    // narrow: only pairs where BOTH sides are in mergedCellData (this tool
-    // already claimed ownership of both cells' terrain by rewriting them) -
-    // never a cell this tool didn't touch, which is Landscape Seam Fixer's
-    // job, not this tool's. Once this tool has decided to rewrite two
-    // adjacent cells independently, making sure its OWN two outputs agree at
-    // their shared edge is squarely this tool's own responsibility, even
-    // when the underlying disagreement (e.g. two unrelated third-party mods'
-    // terrain, found in-game at (8,-1)|(9,-1): QuaintSkyrimFarms.esp vs the
-    // CC Tundra Homestead patch chain) predates this tool and has nothing to
-    // do with roads.
-    //
-    // Snaps the LOWER-confidence side's edge vertex row to match the higher-
-    // confidence side (more road-sourced vertices = more of that cell's final
-    // height actually came from the trusted road-source data, the same
-    // "lean toward Northern Roads' own edits" tie-break Pass C's own within-
-    // cell repair already uses) - only within the same safe, cosmetically-
-    // invisible band used everywhere else in this app family
-    // (WorseningToleranceUnits, LargeResidualThresholdUnits]. Anything larger
-    // is deliberately left alone and falls through to CheckCrossCellContinuity's
-    // [BOUNDARY RESIDUAL] report instead - blindly snapping a large gap risks
-    // the exact "floating terrain chunk" regression PatchForeman's own
-    // BoundaryRepair hit and had to cap against (MaxCleanSnapUnits there,
-    // same 96-unit value here for consistency across the app family).
-    static void ReconcileResidualBoundaries(
-        Dictionary<(int X, int Y), (float[,] Before, float[,] After)> mergedCellData,
-        Dictionary<(int X, int Y), Cell> writableCellByCoord,
-        Dictionary<(int X, int Y), EligibleCell> eligibleCells,
-        Action<string> log)
-    {
-        const float WorseningToleranceUnits = 8f;
-        const float LargeResidualThresholdUnits = 96f;
-
-        // Snapshot the coordinate list up front - repairing one edge can
-        // change a cell's height data that a LATER edge check in this same
-        // pass also reads, but never adds or removes a cell from
-        // mergedCellData, so iterating a fixed list here is safe.
-        var coords = mergedCellData.Keys.ToList();
-        int reconciled = 0;
-        foreach (var (x, y) in coords)
-            reconciled += ReconcileEdge(x, y, x + 1, y, "East", mergedCellData, writableCellByCoord, eligibleCells, log, WorseningToleranceUnits, LargeResidualThresholdUnits)
-                        + ReconcileEdge(x, y, x, y + 1, "North", mergedCellData, writableCellByCoord, eligibleCells, log, WorseningToleranceUnits, LargeResidualThresholdUnits);
-
-        if (reconciled > 0)
-            log($"Cross-cell boundary continuity: {reconciled} residual edge(s) between two cells this run rewrote were snapped to agree (see [BOUNDARY SNAPPED] lines above).");
-    }
-
-    static int ReconcileEdge(
-        int ax, int ay, int bx, int by, string edgeName,
-        Dictionary<(int X, int Y), (float[,] Before, float[,] After)> mergedCellData,
-        Dictionary<(int X, int Y), Cell> writableCellByCoord,
-        Dictionary<(int X, int Y), EligibleCell> eligibleCells,
-        Action<string> log, float tolerance, float largeResidualThreshold)
-    {
-        if (!mergedCellData.TryGetValue((ax, ay), out var a)) return 0;
-        if (!mergedCellData.TryGetValue((bx, by), out var b)) return 0; // only reconcile pairs THIS run rewrote on both sides
-
-        float maxDiff = 0f;
-        for (int i = 0; i <= 32; i++)
-        {
-            float aA, bA;
-            if (edgeName == "East") { aA = a.After[32, i]; bA = b.After[0, i]; }
-            else { aA = a.After[i, 32]; bA = b.After[i, 0]; }
-            maxDiff = Math.Max(maxDiff, Math.Abs(aA - bA));
-        }
-
-        if (maxDiff <= tolerance || maxDiff > largeResidualThreshold) return 0; // clean already, or too big to safely snap
-
-        // Higher-confidence side = more of its final height actually came
-        // from the trusted road-source data.
-        int aRoadCount = eligibleCells.TryGetValue((ax, ay), out var aec) ? CountTrue(aec.RoadSourced) : 0;
-        int bRoadCount = eligibleCells.TryGetValue((bx, by), out var bec) ? CountTrue(bec.RoadSourced) : 0;
-        bool aWins = aRoadCount >= bRoadCount;
-        var (loserCoord, loserData) = aWins ? ((bx, by), b) : ((ax, ay), a);
-        var winnerAfter = aWins ? a.After : b.After;
-        bool loserIsB = loserCoord == (bx, by);
-        // Loser's own edge index: 0 if the loser sits on the East/North side
-        // of the pair (its low-index edge touches the winner), 32 if it sits
-        // on the West/South side (its high-index edge touches the winner) -
-        // same "which end touches the shared boundary" logic the original
-        // single-row version already worked out, just kept as a value here
-        // instead of re-deriving it per-branch below.
-        int loserEdgeIdx = loserIsB ? 0 : 32;
-
-        // FIXED 2026-09-16 (real in-game regression, confirmed at multiple
-        // cells via user screenshots + debug HUD - e.g. ChillfurrowFarmEdge
-        // 7,-4 and RedoransRetreatExterior -4,1, both showing RoadMaskMerge.esp
-        // as the last plugin to touch the Landscape): the original version
-        // only ever wrote the single boundary vertex row/column (index 0 or
-        // 32) to match the winner, leaving the very next row (index 1 or 31)
-        // completely untouched. That trades a CROSS-cell seam for a brand-new,
-        // UN-TAPERED intra-cell cliff of up to LargeResidualThresholdUnits (96
-        // units) over a single 128-unit vertex step - visually a sharp-walled
-        // pit or ledge running along the cell edge, exactly what the
-        // screenshots showed. Same failure class this app family already hit
-        // twice this same night (PatchForeman's BoundaryRepair, Landscape Seam
-        // Fixer's hidden small-seam-repair) - a hard snap with no interior
-        // taper always manufactures a new step somewhere else instead of
-        // actually closing the seam. Fix: apply the same per-vertex edge delta
-        // (winner's edge minus loser's ORIGINAL edge, read once before any
-        // writes) but fade it linearly to zero over TaperWidthVertices
-        // vertices moving inward from the edge, so the correction blends into
-        // the loser cell's own interior instead of stopping dead one vertex
-        // in. Still round-trip verified below exactly like the old version -
-        // this only changes HOW the correction is distributed, not whether an
-        // unsafe encode gets caught.
-        var loserHeights = (float[,])loserData.After.Clone();
-        for (int i = 0; i <= 32; i++)
-        {
-            float winnerEdge = edgeName == "East" ? winnerAfter[32 - loserEdgeIdx, i] : winnerAfter[i, 32 - loserEdgeIdx];
-            float loserEdge = edgeName == "East" ? loserHeights[loserEdgeIdx, i] : loserHeights[i, loserEdgeIdx];
-            float delta = winnerEdge - loserEdge;
-
-            for (int d = 0; d <= TaperWidthVertices; d++)
-            {
-                int idx = loserIsB ? d : 32 - d;
-                float weight = 1f - (float)d / TaperWidthVertices; // 1.0 right at the edge, 0.0 by TaperWidthVertices vertices in
-                if (edgeName == "East") loserHeights[idx, i] += delta * weight;
-                else loserHeights[i, idx] += delta * weight;
-            }
-        }
-
-        var (offset, deltas) = VhgtEncoder.Encode(loserHeights);
-        var roundTrip = VhgtEncoder.DecodeForVerification(offset, deltas);
-        var roundTripError = MaxAbsDiff(roundTrip, loserHeights);
-        if (roundTripError > TaperReconcileRoundTripToleranceUnits)
-        {
-            log($"  [{edgeName} edge ({ax},{ay})|({bx},{by})]: {maxDiff:F0} unit mismatch found but snapping it failed round-trip " +
-                $"verification (error {roundTripError:F0} units) - leaving it alone rather than risk a bad encode.");
-            return 0;
-        }
-
-        var writableCell = writableCellByCoord[loserCoord];
-        writableCell.Landscape!.VertexHeightMap!.Offset = offset;
-        for (int yy = 0; yy <= 32; yy++)
-        for (int xx = 0; xx <= 32; xx++)
-            writableCell.Landscape!.VertexHeightMap!.HeightMap[xx, yy] = deltas[xx, yy];
-        mergedCellData[loserCoord] = (mergedCellData[loserCoord].Before, loserHeights);
-
-        log($"  [BOUNDARY SNAPPED] {edgeName} edge ({ax},{ay})|({bx},{by}): {maxDiff:F0} unit mismatch closed - snapped " +
-            $"cell {loserCoord} (fewer road-sourced vertices) to match its neighbor.");
-        return 1;
-    }
-
-    static int CountTrue(bool[,] arr)
-    {
-        int count = 0;
-        foreach (var v in arr) if (v) count++;
-        return count;
-    }
-
-    static (int Worsened, int Residual) CheckCrossCellContinuity(
+    static int CheckCrossCellContinuity(
         Dictionary<(int X, int Y), (float[,] Before, float[,] After)> mergedCellData,
         Dictionary<(int X, int Y), FormKey> cellByCoord,
         ILinkCache<ISkyrimMod, ISkyrimModGetter> linkCache,
@@ -979,20 +714,7 @@ public static class RoadTerrainMerger
         Action<string> log)
     {
         const float WorseningToleranceUnits = 8f; // one raw VHGT step - anything smaller is encoding noise, not a real new seam
-
-        // A boundary this tool did NOT make worse can still ship a huge,
-        // visibly-broken seam in the final .esp - e.g. two unrelated
-        // third-party mods' terrain meeting at a cell edge neither was ever
-        // authored to align with (found in-game at (8,-1)|(9,-1): QuaintSkyrimFarms.esp
-        // vs the CC Tundra Homestead patch chain, barely any road content on
-        // either side, so nothing here regressed - but the seam is still
-        // there). WorseningToleranceUnits only catches regressions THIS merge
-        // introduced; this second, independent threshold catches large seams
-        // regardless of who caused them, so they can't ship silently.
-        const float LargeResidualThresholdUnits = 96f; // matches the "visibly a cliff, not just an encoding artifact" cap used elsewhere in this app family (PatchForeman/FloatingObjectFixer)
-
         int worsened = 0;
-        int residual = 0;
         var neighborHeightCache = new Dictionary<(int X, int Y), float[,]>();
 
         float[,]? GetActualHeights(int x, int y)
@@ -1008,12 +730,12 @@ public static class RoadTerrainMerger
         foreach (var ((x, y), (before, after)) in mergedCellData)
         {
             // East neighbor (x+1, y)
-            CheckEdge(x, y, x + 1, y, "East", before, after, mergedCellData, GetActualHeights, log, ref worsened, ref residual, WorseningToleranceUnits, LargeResidualThresholdUnits);
+            CheckEdge(x, y, x + 1, y, "East", before, after, mergedCellData, GetActualHeights, log, ref worsened, WorseningToleranceUnits);
             // North neighbor (x, y+1)
-            CheckEdge(x, y, x, y + 1, "North", before, after, mergedCellData, GetActualHeights, log, ref worsened, ref residual, WorseningToleranceUnits, LargeResidualThresholdUnits);
+            CheckEdge(x, y, x, y + 1, "North", before, after, mergedCellData, GetActualHeights, log, ref worsened, WorseningToleranceUnits);
         }
 
-        return (worsened, residual);
+        return worsened;
     }
 
     static void CheckEdge(
@@ -1021,17 +743,15 @@ public static class RoadTerrainMerger
         float[,] aBefore, float[,] aAfter,
         Dictionary<(int X, int Y), (float[,] Before, float[,] After)> mergedCellData,
         Func<int, int, float[,]?> getActualHeights,
-        Action<string> log, ref int worsened, ref int residual, float tolerance, float largeResidualThreshold)
+        Action<string> log, ref int worsened, float tolerance)
     {
         float[,] bBefore, bAfter;
-        bool bothMerged;
         if (mergedCellData.TryGetValue((bx, by), out var neighborMerged))
         {
             // Both sides merged - only check this pair once (from the lower
             // coordinate side) to avoid reporting the same edge twice.
             bBefore = neighborMerged.Before;
             bAfter = neighborMerged.After;
-            bothMerged = true;
         }
         else
         {
@@ -1039,7 +759,6 @@ public static class RoadTerrainMerger
             if (actual is null) return; // neighbor cell doesn't exist (map edge) or has no landscape data at all
             bBefore = actual;
             bAfter = actual; // untouched - "before" and "after" are the same
-            bothMerged = false;
         }
 
         float maxBefore = 0f, maxAfter = 0f;
@@ -1064,24 +783,6 @@ public static class RoadTerrainMerger
         {
             worsened++;
             log($"  [BOUNDARY] {edgeName} edge ({ax},{ay})|({bx},{by}): mismatch went from {maxBefore:F0} to {maxAfter:F0} units because of this merge.");
-        }
-        else if (bothMerged && maxAfter > largeResidualThreshold)
-        {
-            // Restricted to pairs where THIS RUN rewrote both sides - an
-            // untouched neighbor's natural terrain can legitimately differ
-            // by hundreds of units (a real cliff/mountain edge is not a
-            // seam), so checking against it here would flood the log with
-            // false positives. Confirmed on the real list: without this
-            // restriction, 1080 of ~1256 checked edges "failed" - almost
-            // entirely ordinary steep vanilla terrain against cells this
-            // tool never touched, not authoring gaps. Restricting to
-            // both-merged pairs (the same scope ReconcileResidualBoundaries
-            // above already uses) cuts this down to the genuinely
-            // meaningful cases: two cells THIS tool claimed ownership of
-            // that still disagree with each other.
-            residual++;
-            log($"  [BOUNDARY RESIDUAL] {edgeName} edge ({ax},{ay})|({bx},{by}): {maxAfter:F0} unit mismatch remains in the final output " +
-                "(pre-existing - this merge did not cause it - but not closed either).");
         }
     }
 
