@@ -1,5 +1,23 @@
 # Road Mask Merger — Changelog
 
+## v1.3.3 — 2026-09-16
+
+**Real bug found via the user's own xEdit screenshots**, comparing this tool's output against the
+actual winning Northern Roads patch side by side at 3 random cells: v1.3.2's per-vertex texture
+merge only copied a vertex's texture where the HEIGHT-based flood-fill (`RoadSourced`) also flagged
+that exact vertex — but Northern Roads' own road-texture paint covers a much wider footprint than
+the narrower set of vertices where height needed reconciling. Under that gate, only the sliver
+where both footprints happened to overlap ever got copied — most of the real road texture was
+silently dropped, which is what "not copying the winning layers" looked like in xEdit.
+
+**Fix**: merge NR's (or its genuine patch's) own texture data wherever it actually painted
+something, with no height-based gate — the trust boundary is the existing provenance check (is
+this texture owned by the road-source plugin or a genuine patch of it), not `RoadSourced`.
+
+Verified against the real live profile: merged texture footprint at the user's own reported cell
+went from a sparse handful of positions to 50 real painted positions, matching the scale of the
+actual winning patch. Still 855/855 cells merged clean, 0 skipped.
+
 ## v1.3.2 — 2026-09-16
 
 **Real per-vertex road-texture merging, on top of the v1.3.1 baseline (v1.4.x is reverted — see
