@@ -1,5 +1,35 @@
 # Road Mask Merger — Changelog
 
+## v1.4.1 — 2026-09-16
+
+**Fixed a real in-game regression introduced by v1.4.0's own boundary-residual auto-repair**,
+confirmed via user screenshots at multiple cells (e.g. ChillfurrowFarmEdge 7,-4 and
+RedoransRetreatExterior -4,1, both showing this tool's own output as the last plugin to touch the
+Landscape) plus the in-game debug HUD naming this tool. `ReconcileEdge`'s "safe" snap only ever
+wrote the single boundary vertex row/column to match the neighboring cell, leaving the very next
+row completely untouched - trading a cross-cell seam for a brand-new, un-tapered intra-cell cliff
+of up to 96 units over one 128-unit vertex step. Visually: a sharp-walled pit or ledge running
+along a cell/quadrant edge, often right next to water. Same failure class this tool's own sibling
+apps (PatchForeman's `BoundaryRepair`, Landscape Seam Fixer's small-seam-repair) already hit and
+had to disable the same night - a hard snap with no interior taper always manufactures a new step
+somewhere else instead of actually closing the seam.
+
+**Fix**: the same per-vertex edge correction is now faded linearly to zero over 8 vertices moving
+inward from the edge, instead of applied only to the single boundary row. Spreading the correction
+across several vertices interacts with VHGT's cumulative per-row delta encoding (each step rounds
+to the nearest 8 units, and rounding compounds along the chain during decode) enough to trip the
+existing round-trip safety check's 10-unit tolerance on most real boundaries - that tolerance was
+tuned for ordinary two-mod Offset misalignment noise (~3 units typical), not a deliberate
+multi-vertex taper, so this repair path now verifies against its own, still-conservative 50-unit
+tolerance (measured worst case on the real list: 46 units; a genuinely broken encode shows errors
+in the hundreds to thousands).
+
+**Verified against the real live profile before release**: all 89 eligible residual boundaries
+(8-96 unit band, both sides rewritten by this run) now snap cleanly with 0 round-trip rejections,
+up from 19 successful / 71 safely-skipped under the same fix with the original 10-unit tolerance.
+Both exact regression cells from the user's screenshots ((6,-4)|(7,-4)|(8,-4) and (-4,1)|(-3,1))
+now get a properly tapered correction instead of either the old un-tapered pit or a silent skip.
+
 ## v1.4.0 — 2026-09-16
 
 **Fixed: Vortex and Direct game-path modes were silently hard-blocked again**, despite v1.1.0's

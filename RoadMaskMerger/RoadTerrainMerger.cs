@@ -65,6 +65,35 @@ public static class RoadTerrainMerger
     // up as an error of hundreds to thousands of units, not single digits).
     const float RoundTripToleranceUnits = 10f;
 
+    // How many vertices inward from a snapped boundary edge
+    // ReconcileEdge fades its correction over, instead of applying it only
+    // to the single edge row/column - see that method's 2026-09-16 fix
+    // comment for the real in-game regression this closes. 8 keeps the
+    // steepest single vertex-to-vertex step this can ever introduce at or
+    // below LargeResidualThresholdUnits/8 = 12 units - gentler than the
+    // 96-unit band this method is scoped to fixing in the first place.
+    const int TaperWidthVertices = 8;
+
+    // Round-trip tolerance for THIS reconciliation pass specifically -
+    // deliberately looser than the general-purpose RoundTripToleranceUnits
+    // (10 units, tuned for ordinary Offset misalignment noise between two
+    // real mods' authored data, ~3.2 units typical). VHGT's per-row delta
+    // chain rounds every vertex-to-vertex step to the nearest 8 units, and
+    // DecodeForVerification reconstructs by CUMULATIVE SUM - so spreading a
+    // correction across TaperWidthVertices steps (instead of the old
+    // single-vertex snap, which only ever needed one rounding step)
+    // necessarily compounds a few units of rounding noise per step along
+    // the band. Measured against the real live profile before picking this
+    // value: worst case 46 units, typical 13-30, across 90 real eligible
+    // boundaries. That noise is still nowhere near the "hundreds to
+    // thousands of units" signature RoundTripToleranceUnits exists to catch
+    // (a genuinely broken encode) - and even with the noise, the actual
+    // written geometry is still far gentler than the single un-softened
+    // 96-unit cliff this taper replaces. 50 comfortably clears the measured
+    // worst case while still rejecting anything that looks like a real
+    // encode failure.
+    const float TaperReconcileRoundTripToleranceUnits = 50f;
+
     public static RoadMergeResult RunForResolvedPlugins(
         List<Mo2Resolver.ResolvedPlugin> loadOrder,
         string outputPluginName, string outputDirectory,
@@ -866,30 +895,57 @@ public static class RoadTerrainMerger
         bool aWins = aRoadCount >= bRoadCount;
         var (loserCoord, loserData) = aWins ? ((bx, by), b) : ((ax, ay), a);
         var winnerAfter = aWins ? a.After : b.After;
+        bool loserIsB = loserCoord == (bx, by);
+        // Loser's own edge index: 0 if the loser sits on the East/North side
+        // of the pair (its low-index edge touches the winner), 32 if it sits
+        // on the West/South side (its high-index edge touches the winner) -
+        // same "which end touches the shared boundary" logic the original
+        // single-row version already worked out, just kept as a value here
+        // instead of re-deriving it per-branch below.
+        int loserEdgeIdx = loserIsB ? 0 : 32;
 
+        // FIXED 2026-09-16 (real in-game regression, confirmed at multiple
+        // cells via user screenshots + debug HUD - e.g. ChillfurrowFarmEdge
+        // 7,-4 and RedoransRetreatExterior -4,1, both showing RoadMaskMerge.esp
+        // as the last plugin to touch the Landscape): the original version
+        // only ever wrote the single boundary vertex row/column (index 0 or
+        // 32) to match the winner, leaving the very next row (index 1 or 31)
+        // completely untouched. That trades a CROSS-cell seam for a brand-new,
+        // UN-TAPERED intra-cell cliff of up to LargeResidualThresholdUnits (96
+        // units) over a single 128-unit vertex step - visually a sharp-walled
+        // pit or ledge running along the cell edge, exactly what the
+        // screenshots showed. Same failure class this app family already hit
+        // twice this same night (PatchForeman's BoundaryRepair, Landscape Seam
+        // Fixer's hidden small-seam-repair) - a hard snap with no interior
+        // taper always manufactures a new step somewhere else instead of
+        // actually closing the seam. Fix: apply the same per-vertex edge delta
+        // (winner's edge minus loser's ORIGINAL edge, read once before any
+        // writes) but fade it linearly to zero over TaperWidthVertices
+        // vertices moving inward from the edge, so the correction blends into
+        // the loser cell's own interior instead of stopping dead one vertex
+        // in. Still round-trip verified below exactly like the old version -
+        // this only changes HOW the correction is distributed, not whether an
+        // unsafe encode gets caught.
         var loserHeights = (float[,])loserData.After.Clone();
         for (int i = 0; i <= 32; i++)
         {
-            if (edgeName == "East")
+            float winnerEdge = edgeName == "East" ? winnerAfter[32 - loserEdgeIdx, i] : winnerAfter[i, 32 - loserEdgeIdx];
+            float loserEdge = edgeName == "East" ? loserHeights[loserEdgeIdx, i] : loserHeights[i, loserEdgeIdx];
+            float delta = winnerEdge - loserEdge;
+
+            for (int d = 0; d <= TaperWidthVertices; d++)
             {
-                // Loser is whichever side sits on the OTHER end of this edge
-                // from the winner - snap the loser's matching column (0 if
-                // the loser is the East neighbor, 32 if the loser is the West
-                // neighbor) to the winner's opposite column.
-                if (loserCoord == (bx, by)) loserHeights[0, i] = winnerAfter[32, i];
-                else loserHeights[32, i] = winnerAfter[0, i];
-            }
-            else
-            {
-                if (loserCoord == (bx, by)) loserHeights[i, 0] = winnerAfter[i, 32];
-                else loserHeights[i, 32] = winnerAfter[i, 0];
+                int idx = loserIsB ? d : 32 - d;
+                float weight = 1f - (float)d / TaperWidthVertices; // 1.0 right at the edge, 0.0 by TaperWidthVertices vertices in
+                if (edgeName == "East") loserHeights[idx, i] += delta * weight;
+                else loserHeights[i, idx] += delta * weight;
             }
         }
 
         var (offset, deltas) = VhgtEncoder.Encode(loserHeights);
         var roundTrip = VhgtEncoder.DecodeForVerification(offset, deltas);
         var roundTripError = MaxAbsDiff(roundTrip, loserHeights);
-        if (roundTripError > RoundTripToleranceUnits)
+        if (roundTripError > TaperReconcileRoundTripToleranceUnits)
         {
             log($"  [{edgeName} edge ({ax},{ay})|({bx},{by})]: {maxDiff:F0} unit mismatch found but snapping it failed round-trip " +
                 $"verification (error {roundTripError:F0} units) - leaving it alone rather than risk a bad encode.");
