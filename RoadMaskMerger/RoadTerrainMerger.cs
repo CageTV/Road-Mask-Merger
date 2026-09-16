@@ -591,27 +591,43 @@ public static class RoadTerrainMerger
             // own data touched that texture ID anywhere in the quadrant
             // (even a single unrelated corner), NR's actual road paint was
             // skipped for the ENTIRE quadrant, including the vertices the
-            // road genuinely runs through. That's the same class of gap this
-            // tool's HEIGHT merge already solved (Pass 1's
-            // `RoadSourced[x,y] ? NrHeights : OtherHeights` per-vertex
-            // selection) - texture now follows the exact same rule and the
-            // exact same trust boundary: wherever RoadSourced[x,y] is true
-            // (this run already decided NR's own height wins there), NR's
-            // own real per-vertex opacity for its road textures wins there
-            // too, merged into the corresponding quadrant/texture layer
-            // (creating it if absent, respecting the 7-layer cap) rather
-            // than skipped outright or duplicated as a stray extra layer.
-            // Untouched vertices (RoadSourced false) keep Other's own alpha
-            // data exactly as before - still additive/selective, never a
-            // wholesale quadrant repaint, and never touches Base layers.
+            // road genuinely runs through.
+            //
+            // FIRST CUT gated this per-vertex merge by `RoadSourced[x,y]`
+            // (the HEIGHT flood-fill's own grid), on the theory that texture
+            // should follow the same trust boundary as height. WRONG,
+            // confirmed via the user's own xEdit screenshots comparing this
+            // tool's output against the actual winning NR patch side by
+            // side: the patch's real road-texture paint covers a much WIDER
+            // footprint than the narrower set of vertices where HEIGHT also
+            // needed reconciling (RoadSourced is seeded from where the ACMOS
+            // mask + a genuine height edit overlap, then grows only where
+            // height keeps disagreeing - texture coverage is a completely
+            // separate artist decision with no reason to line up 1:1). Under
+            // the RoadSourced gate, only the sliver where both footprints
+            // happened to overlap ever got copied - most of the real road
+            // texture was silently dropped, which is exactly what "not
+            // copying the winning layers" looked like in xEdit.
+            //
+            // Fix: merge NR's (or its genuine patch's) own texture data
+            // WHEREVER it actually painted something (`AlphaLayerData` is
+            // already sparse - only positions NR itself chose to paint are
+            // ever present), with no height-based gate at all. The trust
+            // boundary is the provenance check just above
+            // (`isRoadSourceOwnTexture`), not RoadSourced - if NR/its patch
+            // painted this texture here, that IS the road's own art,
+            // independent of whether this exact vertex also needed a height
+            // fix. Still scoped to cells the flood-fill already decided are
+            // eligible (this loop only runs inside the `roadVertexCount > 0`
+            // branch), still additive/selective per (quadrant,texture) pair,
+            // still never touches Base layers.
             //
             // Deliberately does NOT attempt the general (much riskier,
             // previously tried-and-reverted - see the 2026-09-14
             // TextureSeamFixer "untrusted-vs-untrusted" entry in NOTES.md)
             // job of merging arbitrary texture disagreements between two
             // UNTRUSTED mods - this only ever moves data FROM the already-
-            // trusted road source TO exactly the vertices the height merge
-            // already trusted it for, nothing more.
+            // trusted road source, nothing more.
             int roadTextureLayersMerged = 0;
             foreach (var nrLayer in ec.NrLandscape.Layers)
             {
@@ -621,28 +637,16 @@ public static class RoadTerrainMerger
                     || TrustResolver.IsPatchOfTrustedBase(textureOwner, roadSourcePlugin);
                 if (!isRoadSourceOwnTexture) continue;
 
-                // Reshape NR's sparse (Position,Opacity) list into the
-                // confirmed 17x17 quadrant-local grid (row=Position/17=Y,
-                // col=Position%17=X - see TextureBoundaryAnalyzer.cs in the
-                // sibling TextureSeamFixer tool for the empirical proof of
-                // this layout against real game data) and pick out only the
-                // vertices this run's flood-fill actually marked road-
-                // sourced, translated into the same quadrant-local index
-                // space via QuadrantOffset below.
-                var (offsetX, offsetY) = QuadrantOffset(nrAlpha.Header.Quadrant);
-                var roadVertexOpacity = new Dictionary<ushort, float>(); // quadrant-local Position -> opacity
+                // Reshape NR's sparse (Position,Opacity) list into a plain
+                // Position->Opacity map to merge below - no vertex-level
+                // gate here anymore, see the block comment above for why.
+                var roadVertexOpacity = new Dictionary<ushort, float>();
                 if (nrAlpha.AlphaLayerData is not null)
                 {
                     foreach (var d in nrAlpha.AlphaLayerData)
-                    {
-                        int row = d.Position / 17, col = d.Position % 17;
-                        if (row is < 0 or > 16 || col is < 0 or > 16) continue;
-                        int gx = offsetX + col, gy = offsetY + row;
-                        if (!ec.RoadSourced[gx, gy]) continue; // not a vertex the height merge trusted NR for - leave Other's own data alone here
                         roadVertexOpacity[d.Position] = d.Opacity;
-                    }
                 }
-                if (roadVertexOpacity.Count == 0) continue; // NR paints this texture here, but none of it lands on a road-sourced vertex
+                if (roadVertexOpacity.Count == 0) continue; // NR's own layer here is empty - nothing to merge
 
                 var existingLayer = newLandscape.Layers.OfType<AlphaLayer>().FirstOrDefault(l =>
                     l.Header.Quadrant == nrAlpha.Header.Quadrant &&
