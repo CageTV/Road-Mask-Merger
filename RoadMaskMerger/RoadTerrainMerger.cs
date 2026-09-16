@@ -28,13 +28,6 @@ public static class RoadTerrainMerger
     // headroom for VhgtEncoder's /8-then-round step (see its own comments).
     const float MaxEncodableStep = 1000f;
 
-    // Same verified-against-real-game-data value TextureLayerFixer.cs uses
-    // (7 = 1 mandatory base layer + up to 6 alpha layers, the true observed
-    // per-quadrant maximum) - reused here for the road-texture preservation block
-    // below so this tool never tries to write more layers than the engine
-    // actually supports.
-    const int MaxLayersPerQuadrant = 7;
-
     // Originally set to 40 on the (wrong) assumption that a single-vertex-
     // wide repair front only needs ~33 iterations to cross a 33-wide grid.
     // Confirmed wrong on the very first live test (H:\TB_test, 2026-09-10):
@@ -223,7 +216,7 @@ public static class RoadTerrainMerger
 
         var outputModKey = ModKey.FromNameAndExtension(outputPluginName);
         var patchMod = new SkyrimMod(outputModKey, SkyrimRelease.SkyrimSE);
-        int merged = 0, fellBack = 0, skipped = 0, totalRoadTextureLayersPreserved = 0;
+        int merged = 0, fellBack = 0, skipped = 0;
 
         // Populated for every cell in the target worldspace (merged or not)
         // so the cross-cell continuity check after the main loop can look up
@@ -553,181 +546,47 @@ public static class RoadTerrainMerger
             // Layer 3 - while RoadMaskMerge.esp kept "Other"'s stale texture
             // at that same slot (e.g. LRocks01NoRocks) and only bolted the
             // road texture on as a brand-new extra layer instead of letting
-            // the patch's own data win the slot it already owns): building
-            // the texture stack from "Other" and then trying to ADD the
-            // patch's road layers on top only ever helps where Other is
-            // missing that exact texture ID entirely - it can never REPLACE
-            // a slot Other already occupies with something else, even when
-            // the winning patch's own record for that same slot says
-            // otherwise. A genuine hand-authored compatibility patch (like
-            // "UniqueLocationsRiverwood - Northern Roads.esp") already
-            // reconciled height AND texture together for this cell, verified
-            // in-game by its own author - rebuilding from a WORSE, unrelated
-            // "Other" source and patching fragments back on top can only
-            // lose data the original never needed fixed.
+            // the winning source's own data win the slot it already owns):
+            // building the texture stack from "Other" and then trying to ADD
+            // NR's road layers on top only ever helps where Other is missing
+            // that exact texture ID entirely - it can never REPLACE a slot
+            // Other already occupies with something else, even when the
+            // winning source's own record for that same slot says
+            // otherwise.
             //
-            // Fix: when a genuine patch exists (ec.IsGenuinePatch), its OWN
-            // Landscape becomes the texture (and normals/colors) foundation
-            // instead of Other's - only the height grid still gets replaced
-            // below, same as always. The per-vertex NR-texture merge loop
-            // further down becomes a no-op for these cells (everything it
-            // would add is already present, since it's the same source), and
-            // keeps doing its real job unchanged for cells with no genuine
-            // patch (plain road-source plugin only, where Other really is
-            // the only reasonable texture foundation).
-            var newLandscape = (ec.IsGenuinePatch ? ec.NrLandscape : ec.OtherLandscape!).DeepCopy();
+            // FIRST CUT (v1.3.4) only did this when a genuine hand-authored
+            // patch existed (ec.IsGenuinePatch) - still wrong for a cell
+            // Northern Roads itself edits directly with no patch in the
+            // picture: those cells kept building from "Other" too, same bug,
+            // just uncovered. User's own explicit rule, stated directly:
+            // "if a patch doesn't exist... it should use directly from
+            // northern roads.esp[;] unless a patch exists then it should use
+            // the patch but not the mod its patching to northern roads" -
+            // i.e. NEVER "Other" as the texture foundation when road-source
+            // data is available at all; prefer the patch, falling back to
+            // plain Northern Roads.esp, never falling back to Other.
+            //
+            // Fix: always build from `ec.NrLandscape` (Pass A already
+            // resolves this to the genuine patch when one exists, or plain
+            // Northern Roads.esp otherwise - the exact priority order the
+            // user described) - never from Other. Only the height grid still
+            // gets replaced below, same as always. This also makes the old
+            // per-vertex "preserve NR's own texture layers" merge pass
+            // (v1.3.2/v1.3.3) permanently redundant for every eligible cell
+            // (newLandscape already IS NR's own data now, so every layer it
+            // would have added is already present) - removed rather than
+            // left as dead code.
+            var newLandscape = ec.NrLandscape.DeepCopy();
             newLandscape.VertexHeightMap!.Offset = offset;
             for (int y = 0; y <= 32; y++)
             for (int x = 0; x <= 32; x++)
                 newLandscape.VertexHeightMap!.HeightMap[x, y] = deltas[x, y];
 
-            // FIXED 2026-09-14 (real user-found bug): "Other" is resolved by
-            // ResolveWinningLandscapeExcluding, which - correctly, for the
-            // HEIGHT merge above - excludes not just the plain road-source
-            // plugin but any TrustResolver.IsPatchOfTrustedBase match too
-            // (a pure "<road-source stem> -" filename-prefix test). That
-            // exclusion has a side effect nothing here used to correct for:
-            // an NR-family patch can ALSO carry texture-layer edits that
-            // have nothing to do with roads (confirmed real case: "Northern
-            // Roads - Landscape Fixes for Grass Mods patch.esp" painting a
-            // COTN_LDirtDry alpha layer) - since this tool's texture data
-            // comes ENTIRELY from "Other", never from the road-source side,
-            // that layer silently vanished from every cell this tool
-            // touched.
-            //
-            // GENERALIZED 2026-09-14 (same day, user request): the first cut
-            // of this fix matched by a hardcoded "COTN" EditorID prefix -
-            // Northern Roads' own naming convention, confirmed via houseCARL
-            // against all 22 of its LTEX records, but useless for anyone
-            // running this tool with a DIFFERENT `--road-source=` plugin
-            // (already a fully generic setting for the height merge above).
-            // Replaced with a PROVENANCE check instead of a naming
-            // convention: preserve an alpha layer if its texture record was
-            // ITSELF originally defined by the road-source plugin or a
-            // genuine patch of it (same TrustResolver.IsPatchOfTrustedBase
-            // family test the height side already uses) - this is not just
-            // more general, it's more CORRECT than a prefix ever was: it
-            // can't false-positive on an unrelated texture that happens to
-            // share a naming convention, and doesn't silently do nothing for
-            // a road mod that names its textures differently (or not at
-            // all).
-            //
-            // REBUILT 2026-09-16 (real user report: "1.3.1 is not doing the
-            // Northern Roads textures") from a QUADRANT-presence check to a
-            // real PER-VERTEX merge. The old version only ever added NR's
-            // texture layer when "Other" had ZERO trace of that exact
-            // texture anywhere in the whole quadrant - so the moment Other's
-            // own data touched that texture ID anywhere in the quadrant
-            // (even a single unrelated corner), NR's actual road paint was
-            // skipped for the ENTIRE quadrant, including the vertices the
-            // road genuinely runs through.
-            //
-            // FIRST CUT gated this per-vertex merge by `RoadSourced[x,y]`
-            // (the HEIGHT flood-fill's own grid), on the theory that texture
-            // should follow the same trust boundary as height. WRONG,
-            // confirmed via the user's own xEdit screenshots comparing this
-            // tool's output against the actual winning NR patch side by
-            // side: the patch's real road-texture paint covers a much WIDER
-            // footprint than the narrower set of vertices where HEIGHT also
-            // needed reconciling (RoadSourced is seeded from where the ACMOS
-            // mask + a genuine height edit overlap, then grows only where
-            // height keeps disagreeing - texture coverage is a completely
-            // separate artist decision with no reason to line up 1:1). Under
-            // the RoadSourced gate, only the sliver where both footprints
-            // happened to overlap ever got copied - most of the real road
-            // texture was silently dropped, which is exactly what "not
-            // copying the winning layers" looked like in xEdit.
-            //
-            // Fix: merge NR's (or its genuine patch's) own texture data
-            // WHEREVER it actually painted something (`AlphaLayerData` is
-            // already sparse - only positions NR itself chose to paint are
-            // ever present), with no height-based gate at all. The trust
-            // boundary is the provenance check just above
-            // (`isRoadSourceOwnTexture`), not RoadSourced - if NR/its patch
-            // painted this texture here, that IS the road's own art,
-            // independent of whether this exact vertex also needed a height
-            // fix. Still scoped to cells the flood-fill already decided are
-            // eligible (this loop only runs inside the `roadVertexCount > 0`
-            // branch), still additive/selective per (quadrant,texture) pair,
-            // still never touches Base layers.
-            //
-            // Deliberately does NOT attempt the general (much riskier,
-            // previously tried-and-reverted - see the 2026-09-14
-            // TextureSeamFixer "untrusted-vs-untrusted" entry in NOTES.md)
-            // job of merging arbitrary texture disagreements between two
-            // UNTRUSTED mods - this only ever moves data FROM the already-
-            // trusted road source, nothing more.
-            int roadTextureLayersMerged = 0;
-            foreach (var nrLayer in ec.NrLandscape.Layers)
-            {
-                if (nrLayer is not IAlphaLayerGetter nrAlpha) continue;
-                string textureOwner = nrAlpha.Header.Texture.FormKey.ModKey.FileName;
-                var isRoadSourceOwnTexture = textureOwner.Equals(roadSourcePlugin, StringComparison.OrdinalIgnoreCase)
-                    || TrustResolver.IsPatchOfTrustedBase(textureOwner, roadSourcePlugin);
-                if (!isRoadSourceOwnTexture) continue;
-
-                // Reshape NR's sparse (Position,Opacity) list into a plain
-                // Position->Opacity map to merge below - no vertex-level
-                // gate here anymore, see the block comment above for why.
-                var roadVertexOpacity = new Dictionary<ushort, float>();
-                if (nrAlpha.AlphaLayerData is not null)
-                {
-                    foreach (var d in nrAlpha.AlphaLayerData)
-                        roadVertexOpacity[d.Position] = d.Opacity;
-                }
-                if (roadVertexOpacity.Count == 0) continue; // NR's own layer here is empty - nothing to merge
-
-                var existingLayer = newLandscape.Layers.OfType<AlphaLayer>().FirstOrDefault(l =>
-                    l.Header.Quadrant == nrAlpha.Header.Quadrant &&
-                    l.Header.Texture.FormKey == nrAlpha.Header.Texture.FormKey);
-
-                AlphaLayer targetLayer;
-                if (existingLayer is not null)
-                {
-                    targetLayer = existingLayer;
-                }
-                else
-                {
-                    var quadrantCount = newLandscape.Layers.Count(l => l.Header.Quadrant == nrAlpha.Header.Quadrant);
-                    if (quadrantCount >= MaxLayersPerQuadrant)
-                    {
-                        log($"  [{ec.WsName}] ({coord.X},{coord.Y}): could not merge {nrAlpha.Header.Texture.FormKey} in " +
-                            $"{nrAlpha.Header.Quadrant} - quadrant already at the {MaxLayersPerQuadrant}-layer cap.");
-                        continue;
-                    }
-                    targetLayer = new AlphaLayer
-                    {
-                        Header = new LayerHeader
-                        {
-                            Texture = new FormLink<ILandscapeTextureGetter>(nrAlpha.Header.Texture.FormKey),
-                            Quadrant = nrAlpha.Header.Quadrant,
-                            LayerNumber = (ushort)quadrantCount,
-                        },
-                        AlphaLayerData = new ExtendedList<AlphaLayerData>(),
-                    };
-                    newLandscape.Layers.Add(targetLayer);
-                }
-
-                // Merge by Position: road-sourced vertices take NR's real
-                // opacity (overwriting whatever Other had there, if
-                // anything - same "NR wins where the height merge already
-                // trusted it" rule); every other position Other's own layer
-                // already carried is left exactly as it was.
-                var mergedAlpha = targetLayer.AlphaLayerData!.ToDictionary(d => d.Position, d => d.Opacity);
-                foreach (var (position, opacity) in roadVertexOpacity)
-                    mergedAlpha[position] = opacity;
-                targetLayer.AlphaLayerData = new ExtendedList<AlphaLayerData>(
-                    mergedAlpha.Select(kv => new AlphaLayerData { Position = kv.Key, Opacity = kv.Value }));
-
-                roadTextureLayersMerged++;
-            }
-            totalRoadTextureLayersPreserved += roadTextureLayersMerged;
-
             writableCell.Landscape = newLandscape;
 
             log($"  [{ec.WsName}] ({coord.X},{coord.Y}): merged {ec.OtherModKey.FileName} + {roadSourcePlugin} " +
-                $"({roadVertexCount}/1089 vertices road-sourced, {iterationsUsed} repair pass(es)" +
-                $"{(roadTextureLayersMerged > 0 ? $", {roadTextureLayersMerged} {roadSourcePlugin} texture layer(s) merged" : "")}" +
+                $"({roadVertexCount}/1089 vertices road-sourced, {iterationsUsed} repair pass(es), " +
+                $"texture from {(ec.IsGenuinePatch ? "its genuine patch" : roadSourcePlugin)}" +
                 $"{(fullRoadFallback ? ", FULL ROAD FALLBACK" : "")}).");
             merged++;
             if (fullRoadFallback) fellBack++;
@@ -748,8 +607,8 @@ public static class RoadTerrainMerger
             .WithAllParentMasters()
             .Write(patchMod);
 
-        log($"Merged {merged} cell(s) ({fellBack} via full-road fallback), skipped {skipped}, " +
-            $"{totalRoadTextureLayersPreserved} {roadSourcePlugin} texture layer(s) preserved that would otherwise have been dropped.");
+        log($"Merged {merged} cell(s) ({fellBack} via full-road fallback), skipped {skipped}. " +
+            $"Texture always sourced from {roadSourcePlugin} or its genuine patch, never from \"Other\" - see per-cell lines above.");
 
         var worsenedBoundaries = CheckCrossCellContinuity(mergedCellData, cellByCoord, linkCache, priorityIndex, log);
         if (worsenedBoundaries == 0)

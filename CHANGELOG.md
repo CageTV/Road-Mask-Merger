@@ -1,5 +1,26 @@
 # Road Mask Merger — Changelog
 
+## v1.3.5 — 2026-09-16
+
+**Closed the gap v1.3.4 left open.** That fix only used the road-source's own texture as the
+foundation when a genuine hand-authored patch existed for a cell (`ec.IsGenuinePatch`) — a cell
+Northern Roads edits directly with no patch involved still built its texture stack from "Other"
+and hit the identical slot-can't-be-replaced bug. User's own explicit rule: "if a patch doesn't
+exist... it should use directly from northern roads.esp[;] unless a patch exists then it should
+use the patch but not the mod its patching to northern roads."
+
+**Fix**: always build the texture foundation from `ec.NrLandscape` — Pass A already resolves this
+to the genuine patch when one exists, or plain Northern Roads.esp otherwise, which is exactly the
+priority order requested. "Other" is never the texture source anymore when road-source data is
+available at all. This also makes the per-vertex "preserve NR's own texture" merge pass from
+v1.3.2/v1.3.3 permanently redundant (the foundation already IS that data) — removed rather than
+left as dead code, along with the now-unused 7-layer-cap bookkeeping it needed.
+
+Verified against the real live profile: both reported cells (one with no cell-specific patch at
+all) now carry real Northern Roads texture directly, 39–76 painted positions per quadrant across
+3 quadrants each. Still 855/855 cells merged clean, 0 skipped. Build is also cleaner: 0 warnings
+(down from 3 pre-existing ones, all in the removed code).
+
 ## v1.3.4 — 2026-09-16
 
 **Real bug found via the user's own xEdit screenshot**, comparing the winning genuine patch's
