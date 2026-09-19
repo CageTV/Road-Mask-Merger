@@ -56,8 +56,15 @@ public static class HeightmapDecoder
                 sbyte delta = map[x, y];
                 if (x == 0)
                 {
+                    // FIXED (bug report: github.com/CageTV/landscape-seam-fixer/issues/2):
+                    // VHGT.Offset uses the SAME 8-unit-per-step quantization as
+                    // the delta bytes (confirmed against the UESP VHGT spec and
+                    // Mutagen's raw unscaled Float field) - storing/reading the
+                    // raw world height here was 8x too large/small, producing
+                    // false seam detections. Offset must be added to the delta
+                    // BEFORE the *8 scaling, mirroring VhgtEncoder's matching /8.
                     heights[0, y] = y == 0
-                        ? vhgt.Offset + delta * 8f
+                        ? (vhgt.Offset + delta) * 8f
                         : heights[0, y - 1] + delta * 8f;
                 }
                 else

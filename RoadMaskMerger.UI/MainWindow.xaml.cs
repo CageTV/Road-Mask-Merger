@@ -443,8 +443,32 @@ public partial class MainWindow : Window
         }
         else
         {
-            ShowValidation("Road Mask Merger currently only supports MO2 mode (Vortex/Direct aren't wired up yet).");
-            return null;
+            // FOUND AS A REAL REGRESSION: the Vortex/Direct UI panels and
+            // RoadTerrainMerger.RunForDirectDataFolder both already existed
+            // and worked - this hard block was the only piece never actually
+            // wired up, so both modes refused to run regardless of what the
+            // user filled in. Was fixed once in v1.4.0, but that fix got
+            // reverted along with v1.4.0's separate, real texture-foundation
+            // bug (see the "Revert to v1.3.1 baseline" commit) and never
+            // re-applied on the v1.3.x line the revert kept. Mirrors the
+            // sibling Landscape Seam Fixer tool's own
+            // GenerateFixPluginForDirectDataFolder call shape.
+            var dataFolder = s.IsVortexMode ? s.VortexGameDataPath : s.DirectGameDataPath;
+            if (string.IsNullOrEmpty(dataFolder))
+            {
+                ShowValidation("Please fill in the game Data folder.");
+                return null;
+            }
+
+            Log($"Game Data path: {dataFolder}");
+            Log($"Road-source plugin: {s.RoadSourcePlugin}");
+            Log($"Worldspace: {s.Worldspace}");
+            Log($"ACMOS roads folder: {s.AcmosRoadsFolder} ({(s.PathsOnly ? "Paths Only" : "Roads")} variant)");
+            Log("");
+
+            return RoadTerrainMerger.RunForDirectDataFolder(
+                dataFolder, pluginName, outputFolder, Log,
+                s.RoadSourcePlugin, s.AcmosRoadsFolder, s.Worldspace, s.PathsOnly);
         }
     }
 

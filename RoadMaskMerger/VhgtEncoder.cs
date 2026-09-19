@@ -12,11 +12,17 @@ public static class VhgtEncoder
 {
     // delta[0,0] is always encoded as 0, so Offset alone exactly reproduces
     // heights[0,0] with zero rounding error - the one vertex in the whole
-    // grid we can always get byte-for-byte exact.
+    // grid we can always get byte-for-byte exact. Offset is stored in the
+    // SAME 8-unit-per-step quantization as the delta bytes (confirmed
+    // against the UESP VHGT spec and Mutagen's raw unscaled Float field) -
+    // it must be divided by 8 here, mirroring the *8 the decoder applies
+    // on read. Storing the raw world height here (pre-fix bug, see
+    // github.com/CageTV/landscape-seam-fixer/issues/2) wrote an Offset 8x
+    // too large into real plugin files.
     public static (float Offset, sbyte[,] Deltas) Encode(float[,] heights)
     {
         var deltas = new sbyte[33, 33];
-        float offset = heights[0, 0];
+        float offset = heights[0, 0] / 8f;
         deltas[0, 0] = 0;
 
         for (int y = 1; y <= 32; y++)
@@ -53,7 +59,7 @@ public static class VhgtEncoder
         {
             sbyte delta = deltas[x, y];
             heights[x, y] = x == 0
-                ? (y == 0 ? offset + delta * 8f : heights[0, y - 1] + delta * 8f)
+                ? (y == 0 ? (offset + delta) * 8f : heights[0, y - 1] + delta * 8f)
                 : heights[x - 1, y] + delta * 8f;
         }
         return heights;

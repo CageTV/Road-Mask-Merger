@@ -1,5 +1,26 @@
 # Road Mask Merger — Changelog
 
+## v1.4.3 — 2026-09-19
+
+Builds on v1.3.5 (this line), not on the separately-numbered v1.4.0/v1.4.1 on Nexus - those
+were reverted here for a real in-game regression (see the v1.3.1 revert entry below) and never
+carried the texture-foundation fix. This release combines three fixes into one:
+
+**VHGT `Offset` scaling fix** (reported: github.com/CageTV/landscape-seam-fixer/issues/2).
+`VHGT.Offset` uses the same 8-unit-per-step quantization as the per-vertex delta bytes, not a raw
+world-space height - reading/writing it unscaled produced false seam detections (one reporter
+measured 59,693 → 1,577 after the fix, with all 26 tested vanilla-adjacent boundaries coming out
+continuous) and could write terrain up to 8x displaced from the intended height in a generated
+plugin. Fixed in both `HeightmapDecoder.DecodeHeights` (read) and `VhgtEncoder.Encode`/
+`DecodeForVerification` (write + round-trip check) - both sides of the same formula, kept in sync.
+
+**Vortex/Direct mode wiring fix.** Selecting Vortex or Direct in the UI has shown "Road Mask
+Merger currently only supports MO2 mode" and refused to run, unconditionally, since v1.3.1 - this
+was actually fixed once, in v1.4.0, but that fix was reverted along with v1.4.0's unrelated,
+real texture-foundation bug and never re-applied on the v1.3.x line that revert kept. Re-applied
+here on its own: `RoadTerrainMerger.RunForDirectDataFolder` already existed and worked, this was
+only ever a UI dispatch gap.
+
 ## v1.3.5 — 2026-09-16
 
 **Closed the gap v1.3.4 left open.** That fix only used the road-source's own texture as the
