@@ -93,6 +93,16 @@ public static class TrustResolver
         "FloatingObjectFixes.esp", "PatchForeman.esp",
     };
 
+    // Third-party GENERATED plugins that copy whole landscape records forward
+    // from whatever won when they ran - never a real source of terrain. Kept
+    // apart from SiblingToolOutputs (this family's own outputs) on purpose.
+    // Added 2026-09-26: SnowFixer.esp was being used as RoadMaskMerger's
+    // "Other" baseline, feeding an older RoadMaskMerge.esp's heights back in.
+    public static readonly HashSet<string> ThirdPartyGeneratedOutputs = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "SnowFixer.esp",
+    };
+
     // Every entry above is trusted alongside its own compatibility-patch
     // family too, not just standalone - most Nexus mods name patches
     // "<Mod Name> - <what it patches>.esp" (LWF's LFfGM/GotT/Myrwatch/...

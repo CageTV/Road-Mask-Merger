@@ -1,5 +1,27 @@
 # Road Mask Merger — Changelog
 
+## v1.4.4 — 2026-09-27
+
+**Reconciliation patches now cover the whole cell, not just the road.** When a road-source patch
+reconciles the other mod in a cell — it lists that mod as a master (e.g. "Northern Roads - Skyking's
+Granite Hill Patch.esp" masters aaaGraniteHill.esp), or a mod whose patch family the other mod belongs
+to, and loads after it — the patch author has already merged the two across the entire cell. Previous
+versions used the patch only on road vertices and the plain other mod everywhere else, which threw away
+the patch's work off the road and left the other mod's un-reconciled edge against a neighbor the same
+patch had lined up. Found by measuring both sides of three reported seams: the patch's own copy of each
+cell lined up exactly with its neighbor, while the old output sat 24, 64 and 120 units off. All three are
+0 now. A patch for an unrelated conflict that merely touches a cell still gets the ordinary road-only
+merge, and a cell no other mod edits (vanilla only) is unchanged.
+
+**Snow Fixer's output is no longer used as the "other mod" terrain.** `SnowFixer.esp` loads after nearly
+everything and carries a full copy of whatever terrain won when it ran — possibly an older
+RoadMaskMerge.esp — so using it fed this tool's own past output back in. It is now skipped the same way
+this family's own tool outputs already were.
+
+On a 1,380-plugin load order: 177 cells now use their reconciliation patch for the whole cell, and the
+tool's own "boundaries made worse by this merge" check dropped from 5 to 1 (the remaining one comes from
+the unchanged road-onto-vanilla path).
+
 ## v1.4.3 — 2026-09-19
 
 Builds on v1.3.5 (this line), not on the separately-numbered v1.4.0/v1.4.1 on Nexus - those

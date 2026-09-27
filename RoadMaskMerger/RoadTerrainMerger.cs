@@ -92,9 +92,10 @@ public static class RoadTerrainMerger
             // master - confirmed via a per-vertex height diagnostic showing
             // this tool sourced road height from a DIFFERENT, unrelated NR
             // patch instead of the user's own carefully hand-blended one.
-            TrustResolver.SetMastersContext(BuildMastersByPlugin(env.LoadOrder.ListedOrder), outputPluginName);
+            var mastersByPlugin = BuildMastersByPlugin(env.LoadOrder.ListedOrder);
+            TrustResolver.SetMastersContext(mastersByPlugin, outputPluginName);
             return GenerateCore(env.LinkCache, priorityIndex, mergedFolder, outputPluginName, outputDirectory,
-                log, roadSourcePlugin, acmosRoadsFolder, worldspaceFilter, pathsOnly);
+                log, roadSourcePlugin, acmosRoadsFolder, worldspaceFilter, pathsOnly, mastersByPlugin);
         }
         finally
         {
@@ -132,9 +133,10 @@ public static class RoadTerrainMerger
             .Select((listing, idx) => (listing.ModKey, idx))
             .ToDictionary(x => x.ModKey, x => x.idx);
 
-        TrustResolver.SetMastersContext(BuildMastersByPlugin(env.LoadOrder.ListedOrder), outputPluginName);
+        var mastersByPlugin = BuildMastersByPlugin(env.LoadOrder.ListedOrder);
+        TrustResolver.SetMastersContext(mastersByPlugin, outputPluginName);
         return GenerateCore(env.LinkCache, priorityIndex, dataFolderPath, outputPluginName, outputDirectory,
-            log, roadSourcePlugin, acmosRoadsFolder, worldspaceFilter, pathsOnly);
+            log, roadSourcePlugin, acmosRoadsFolder, worldspaceFilter, pathsOnly, mastersByPlugin);
     }
 
     // ESP masters, keyed by filename (not ModKey - matches how every other
@@ -192,7 +194,8 @@ public static class RoadTerrainMerger
         string roadSourcePlugin,
         string acmosRoadsFolder,
         string worldspaceFilter,
-        bool pathsOnly)
+        bool pathsOnly,
+        Dictionary<string, HashSet<string>> mastersByPlugin)
     {
         using var roadMask = new RoadMaskSampler(acmosRoadsFolder, worldspaceFilter, pathsOnly);
         if (!roadMask.IsAvailable)
@@ -216,7 +219,7 @@ public static class RoadTerrainMerger
 
         var outputModKey = ModKey.FromNameAndExtension(outputPluginName);
         var patchMod = new SkyrimMod(outputModKey, SkyrimRelease.SkyrimSE);
-        int merged = 0, fellBack = 0, skipped = 0;
+        int merged = 0, fellBack = 0, skipped = 0, reconciledByPatch = 0;
 
         // Populated for every cell in the target worldspace (merged or not)
         // so the cross-cell continuity check after the main loop can look up
@@ -338,6 +341,34 @@ public static class RoadTerrainMerger
             float[,]? otherHeights = otherLandscape?.VertexHeightMap is null
                 ? null // nothing else to merge against here - SeamFixer's own machinery is the right tool instead; still tracked as eligible so Pass B can grow THROUGH this cell into a neighbor that does have an "other" base
                 : HeightmapDecoder.DecodeHeights(otherLandscape.VertexHeightMap);
+
+            // FIXED 2026-09-26 (seams found by PatchForeman's neighbor
+            // diagnostic, 3 cells): when the genuine road-source patch
+            // RECONCILES "Other" - it masters Other itself, or a mod whose patch
+            // family Other belongs to - and loads after it, the patch author
+            // already merged the two across the WHOLE cell. Using the patch
+            // only on road vertices and Other everywhere else threw that away
+            // off the road, leaving Other's un-reconciled edge against a
+            // neighbor the same patch had lined up. Confirmed per plugin, both
+            // sides of the edge: the patch's own copy of this cell sat 0 units
+            // off its neighbor, while the Other-sourced copy sat 24-120 off:
+            //   (-14,-8)  Northern Roads - Skyking's Granite Hill Patch.esp masters aaaGraniteHill.esp
+            //   (42,9)    Northern Roads - Unique Border Gates Fixes patch.esp masters Unique Border Gates - Fixes.esp
+            //   (3,-15)   UniqueLocationsRiverwood - Northern Roads.esp masters UniqueLocationsRiverwoodForest.esp,
+            //             whose patch family includes Other (UniqueLocationsRiverwood - Landscape Fixes.esp)
+            // A patch for an UNRELATED conflict that merely touches the cell
+            // (e.g. "Northern Roads - Skyrim Wayshrines patch.esp") doesn't
+            // master Other, so it still gets the ordinary road-only merge.
+            if (nrPatchLandscape is not null && otherLandscape is not null
+                && nrPatchIndex > priorityIndex.GetValueOrDefault(otherModKey, -1)
+                && PatchReconcilesOther(nrPatchOwner.FileName, otherModKey.FileName, roadSourcePlugin, mastersByPlugin))
+            {
+                log($"  [{wsName}] ({cell.Grid.Point.X},{cell.Grid.Point.Y}): {nrPatchOwner.FileName} reconciles {otherModKey.FileName} - using the patch's terrain for the whole cell, not just the road.");
+                otherHeights = nrHeights;
+                otherLandscape = nrLandscape;
+                otherModKey = nrPatchOwner;
+                reconciledByPatch++;
+            }
 
             eligibleCells[coord] = new EligibleCell
             {
@@ -607,7 +638,8 @@ public static class RoadTerrainMerger
             .WithAllParentMasters()
             .Write(patchMod);
 
-        log($"Merged {merged} cell(s) ({fellBack} via full-road fallback), skipped {skipped}. " +
+        log($"Merged {merged} cell(s) ({fellBack} via full-road fallback), skipped {skipped}; " +
+            $"{reconciledByPatch} eligible cell(s) had a road-source patch that reconciles their other mod, so that patch's terrain was used for the whole cell. " +
             $"Texture always sourced from {roadSourcePlugin} or its genuine patch, never from \"Other\" - see per-cell lines above.");
 
         var worsenedBoundaries = CheckCrossCellContinuity(mergedCellData, cellByCoord, linkCache, priorityIndex, log);
@@ -772,6 +804,33 @@ public static class RoadTerrainMerger
     // "other," or it could end up picked as both at once), and this tool's
     // own output - "what would this cell's terrain be if the road-shaping
     // mod (and its patch family) didn't exist at all."
+    // Base masters nearly every plugin carries - never evidence that a patch
+    // reconciles anything in particular.
+    static readonly HashSet<string> BaseMasters = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Skyrim.esm", "Update.esm", "Dawnguard.esm", "HearthFires.esm", "Dragonborn.esm",
+    };
+
+    // True when the road-source patch `patch` is a reconciliation of `other`:
+    // it lists `other` as a master, or lists a (non-base, non-road-source) mod
+    // that `other` is itself a patch of.
+    static bool PatchReconcilesOther(string patch, string other, string roadSourcePlugin,
+        Dictionary<string, HashSet<string>> mastersByPlugin)
+    {
+        // Other = a base master means no other mod edits this cell at all -
+        // every patch masters Skyrim.esm, so that is never a reconciliation.
+        // Those cells keep the ordinary road-only merge onto vanilla.
+        if (BaseMasters.Contains(other)) return false;
+        if (!mastersByPlugin.TryGetValue(patch, out var patchMasters)) return false;
+        if (patchMasters.Contains(other)) return true;
+        foreach (var m in patchMasters)
+        {
+            if (BaseMasters.Contains(m) || m.Equals(roadSourcePlugin, StringComparison.OrdinalIgnoreCase)) continue;
+            if (TrustResolver.IsPatchOfTrustedBase(other, m)) return true;
+        }
+        return false;
+    }
+
     static (ILandscapeGetter? Landscape, ModKey OwnerModKey) ResolveWinningLandscapeExcluding(
         FormKey cellFormKey,
         ILinkCache<ISkyrimMod, ISkyrimModGetter> linkCache,
@@ -797,6 +856,13 @@ public static class RoadTerrainMerger
             // "Other" baseline on a re-run instead of real underlying mod
             // data. See TrustResolver.SiblingToolOutputs for the full story.
             if (TrustResolver.SiblingToolOutputs.Contains(ctxFileName)) continue;
+            // FIXED 2026-09-26: same stale-copy bug class for third-party
+            // GENERATED plugins. SnowFixer.esp loads after nearly everything and
+            // carries a full copy of whatever terrain won when IT ran - possibly
+            // an older RoadMaskMerge.esp - so picking it as "Other" fed this
+            // tool's own past output back in. Confirmed at (3,-15) and (42,9),
+            // where it was the Other baseline over the real mods underneath.
+            if (TrustResolver.ThirdPartyGeneratedOutputs.Contains(ctxFileName)) continue;
             var idx = priorityIndex.GetValueOrDefault(ctx.ModKey, -1);
             if (idx > bestIndex)
             {

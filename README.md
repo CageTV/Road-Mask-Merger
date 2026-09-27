@@ -37,7 +37,9 @@ road-network map instead of guesswork:
 5. **Recognizes the road mod's own compatibility patches** (e.g. "Northern
    Roads - Some Other Mod Patch.esp") and prefers a patch's data over the
    plain road plugin wherever one exists, the same "a patch beats its base"
-   rule Landscape Seam Fixer already uses.
+   rule Landscape Seam Fixer already uses. When that patch reconciles the
+   other mod in the cell (it lists that mod as a master and loads after it),
+   the patch's terrain is used for the whole cell, not just the road (v1.4.4).
 6. Everything else about the cell — water, placed objects — is carried
    forward completely unchanged from whichever mod already owned it.
    Texture layers mostly work this way too, with one narrow exception (v1.2.0):
