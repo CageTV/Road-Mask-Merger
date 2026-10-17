@@ -71,6 +71,8 @@ try
     Console.WriteLine($"Merged {result.CellsMerged} cell(s), {result.CellsFellBackToFullRoad} via full-road fallback, {result.CellsSkipped} skipped.");
     if (!string.IsNullOrEmpty(result.OutputPath))
         Console.WriteLine($"Output: {result.OutputPath}");
+        if (result.AllOutputPaths is { Count: > 1 })
+            Console.WriteLine("Split (master limit): enable ALL of: " + string.Join(", ", result.AllOutputPaths.Select(System.IO.Path.GetFileName)));
 }
 catch (Exception ex)
 {

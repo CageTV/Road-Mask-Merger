@@ -22,6 +22,9 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        // Never open bigger than the usable screen (1080p at 125-150% scaling has well under 1000 DIPs of height).
+        Height = System.Math.Min(Height, System.Windows.SystemParameters.WorkArea.Height - 16);
+        Width = System.Math.Min(Width, System.Windows.SystemParameters.WorkArea.Width - 16);
         // Bundled alongside this app (Assets\ACMOS-roads, copied at build
         // time - see RoadMaskMerger's Assets\NOTICE.md for the license this
         // carries) so it works out of the box; the box stays editable if a
@@ -393,6 +396,8 @@ public partial class MainWindow : Window
             _lastOutputFolder = outputFolder;
             ResultText.Text = $"Merged {result.CellsMerged} cell(s) ({result.CellsFellBackToFullRoad} via full-road fallback, {result.CellsSkipped} skipped). " +
                 "Review the log (especially [BOUNDARY] lines) before installing.";
+            if (result.AllOutputPaths is { Count: > 1 } splitFiles)
+                ResultText.Text += $" SPLIT into {splitFiles.Count} plugins ({string.Join(", ", splitFiles.Select(System.IO.Path.GetFileName))}) - enable ALL of them, next to each other in the load order.";
             OpenFixPluginButton.IsEnabled = !string.IsNullOrEmpty(result.OutputPath);
             OpenFolderButton.IsEnabled = true;
         }

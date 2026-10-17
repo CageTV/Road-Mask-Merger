@@ -93,6 +93,10 @@ public static class TrustResolver
         "FloatingObjectFixes.esp", "PatchForeman.esp",
     };
 
+    // A sibling tool's output, including the extra plugins it writes when it splits (RoadMaskMerge_2.esp, ...).
+    public static bool IsSiblingToolOutput(string plugin) =>
+        SiblingToolOutputs.Contains(plugin) || SiblingToolOutputs.Any(b => PluginSplitWriter.IsSplitSiblingOf(plugin, b));
+
     // Third-party GENERATED plugins that copy whole landscape records forward
     // from whatever won when they ran - never a real source of terrain. Kept
     // apart from SiblingToolOutputs (this family's own outputs) on purpose.
@@ -183,7 +187,8 @@ public static class TrustResolver
     // (any OTHER merge tool's output in the load order, not just this one).
     static bool HasMasterRelationship(string plugin, string baseName)
     {
-        if (_outputPluginNameForRun is not null && plugin.Equals(_outputPluginNameForRun, StringComparison.OrdinalIgnoreCase))
+        if (_outputPluginNameForRun is not null && (plugin.Equals(_outputPluginNameForRun, StringComparison.OrdinalIgnoreCase)
+                || PluginSplitWriter.IsSplitSiblingOf(plugin, _outputPluginNameForRun)))
             return false;
         if (_mastersByPlugin is null || !_mastersByPlugin.TryGetValue(plugin, out var masters))
             return false;

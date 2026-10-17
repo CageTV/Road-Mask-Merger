@@ -20,7 +20,7 @@ using SeamFinder.Core;
 
 namespace RoadMaskMerger;
 
-public record RoadMergeResult(int CellsMerged, int CellsFellBackToFullRoad, int CellsSkipped, string OutputPath);
+public record RoadMergeResult(int CellsMerged, int CellsFellBackToFullRoad, int CellsSkipped, string OutputPath, IReadOnlyList<string>? AllOutputPaths = null);
 
 public static class RoadTerrainMerger
 {
@@ -631,12 +631,7 @@ public static class RoadTerrainMerger
         log(eslResult.Summary);
 
         log($"Writing patch plugin to {outputPath} ...");
-        SkyrimMod.WriteBuilder(SkyrimRelease.SkyrimSE)
-            .ToPath(outputPath, fileSystem: null)
-            .WithNoLoadOrder()
-            .WithDataFolder(dataFolderForWrite)
-            .WithAllParentMasters()
-            .Write(patchMod);
+        var writtenPlugins = PluginSplitWriter.Write(patchMod, outputPath, dataFolderForWrite, log);
 
         log($"Merged {merged} cell(s) ({fellBack} via full-road fallback), skipped {skipped}; " +
             $"{reconciledByPatch} eligible cell(s) had a road-source patch that reconciles their other mod, so that patch's terrain was used for the whole cell. " +
@@ -653,7 +648,7 @@ public static class RoadTerrainMerger
                 "B\"). A residual warning here means Northern Roads has NO genuine edit at all on the OTHER side of " +
                 "that specific boundary, so there is no NR data left to safely extend into - review it in-game.");
 
-        return new RoadMergeResult(merged, fellBack, skipped, outputPath);
+        return new RoadMergeResult(merged, fellBack, skipped, outputPath, writtenPlugins);
     }
 
     // Extends the region-growing flood-fill in Pass B across a cell
@@ -855,7 +850,7 @@ public static class RoadTerrainMerger
             // (itself downstream of RoadMaskMerge) could get picked up as the
             // "Other" baseline on a re-run instead of real underlying mod
             // data. See TrustResolver.SiblingToolOutputs for the full story.
-            if (TrustResolver.SiblingToolOutputs.Contains(ctxFileName)) continue;
+            if (TrustResolver.IsSiblingToolOutput(ctxFileName)) continue;
             // FIXED 2026-09-26: same stale-copy bug class for third-party
             // GENERATED plugins. SnowFixer.esp loads after nearly everything and
             // carries a full copy of whatever terrain won when IT ran - possibly
