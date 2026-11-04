@@ -106,7 +106,7 @@ public partial class MainWindow : Window
     }
 
     // Writes the exact settings a run used into that run's own output
-    // folder too (alongside log.txt/esp), separate from the always-on-launch
+    // folder too (alongside RoadMaskMerger-log.txt/esp), separate from the always-on-launch
     // copy above - a record of what config produced this particular output,
     // portable with it if the folder is shared/moved. Matches SeamFinder.UI's
     // own pattern (added there first; ported here 2026-09-15 for uniformity
@@ -116,7 +116,7 @@ public partial class MainWindow : Window
         try
         {
             Directory.CreateDirectory(outputFolder);
-            File.WriteAllText(Path.Combine(outputFolder, "settings-used.json"),
+            File.WriteAllText(Path.Combine(outputFolder, "RoadMaskMerger-settings-used.json"),
                 System.Text.Json.JsonSerializer.Serialize(s, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
         }
         catch
@@ -509,7 +509,7 @@ public partial class MainWindow : Window
         }
     }
 
-    // Points AppendLog's file mirror at <outputFolder>/log.txt and starts it
+    // Points AppendLog's file mirror at <outputFolder>/RoadMaskMerger-log.txt and starts it
     // fresh (matching LogBox.Clear() for the UI copy) - same folder the esp
     // for this run lands in. Matches SeamFinder.UI's own pattern.
     void StartLogFile(string outputFolder)
@@ -518,7 +518,7 @@ public partial class MainWindow : Window
         try
         {
             Directory.CreateDirectory(outputFolder);
-            _currentLogFilePath = Path.Combine(outputFolder, "log.txt");
+            _currentLogFilePath = Path.Combine(outputFolder, "RoadMaskMerger-log.txt");
             File.WriteAllText(_currentLogFilePath, "");
         }
         catch
